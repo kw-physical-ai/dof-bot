@@ -6,6 +6,8 @@ import sys
 import time
 from typing import Optional
 
+from arm_control import exclusive_arm, read_angles
+
 
 MAX_STEP_DEGREES = 10
 MOTION_TIME_MS = 1000
@@ -36,8 +38,7 @@ def read_angle(arm: object, servo: int) -> Optional[int]:
     return round(value)
 
 
-def main() -> int:
-    args = parse_args()
+def run(args) -> int:
     try:
         from Arm_Lib import Arm_Device
     except ImportError as exc:
@@ -47,7 +48,7 @@ def main() -> int:
     try:
         arm = Arm_Device()
         time.sleep(0.1)
-        angles = {servo: read_angle(arm, servo) for servo in range(1, 7)}
+        angles = read_angles(arm)
         for servo, angle in angles.items():
             print(f"Servo {servo}: {angle if angle is not None else 'unavailable'}")
 
@@ -75,6 +76,16 @@ def main() -> int:
         return 0
     except Exception as exc:
         print(f"Arm communication failed: {exc}", file=sys.stderr)
+        return 1
+
+
+def main() -> int:
+    args = parse_args()
+    try:
+        with exclusive_arm():
+            return run(args)
+    except Exception as exc:
+        print(f"Arm access failed: {exc}", file=sys.stderr)
         return 1
 
 
