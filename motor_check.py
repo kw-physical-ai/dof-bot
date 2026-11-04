@@ -77,10 +77,32 @@ def advice(results):
     return notes
 
 
+def watch(arm, servo):
+    print('Servo {} ({}). Readable range 0..180 (about 90 is centered). '
+          'Ctrl+C stops.'.format(servo, NAMES[servo]), flush=True)
+    try:
+        while True:
+            try:
+                unbounded = arm.Arm_serial_servo_read_any(servo)
+                value = arm.Arm_serial_servo_read(servo)
+            except Exception as exc:
+                unbounded, value = None, 'error: {}'.format(exc)
+            state = ('in range' if value is not None and not isinstance(value, str)
+                     else 'OUT OF RANGE / no data')
+            print('angle {:>5}   read {:>5}   {}'.format(str(unbounded), str(value), state),
+                  flush=True)
+            time.sleep(0.3)
+    except KeyboardInterrupt:
+        return 0
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--reads', type=int, default=10)
     parser.add_argument('--gap', type=float, default=0.05, help='seconds between reads')
+    parser.add_argument('--watch', type=int, choices=range(1, 7), metavar='1-6',
+                        help='print one servo angle continuously (turn it by hand '
+                             'and watch); Ctrl+C stops. Read only.')
     args = parser.parse_args()
     if not 1 <= args.reads <= 100 or not 0 <= args.gap <= 2:
         parser.error('--reads must be 1..100 and --gap 0..2')
@@ -89,6 +111,8 @@ def main():
             from Arm_Lib import Arm_Device
             arm = Arm_Device()
             time.sleep(0.2)
+            if args.watch:
+                return watch(arm, args.watch)
             results = {}
             print('servo  name         ping       state         unbounded  reads')
             for servo in range(1, 7):
