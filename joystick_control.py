@@ -22,14 +22,20 @@ MOVE_MS = 250
 
 
 class Controls:
-    def __init__(self, axis=0, enable=6, stop=7, invert=False):
+    def __init__(self, axis=0, enable=6, stop=7, invert=False,
+                 step_button=None, steps=(STEP_DEGREES,)):
         self.axis, self.enable, self.stop = axis, enable, stop
         self.invert = invert
+        self.step_button, self.steps, self.step_index = step_button, tuple(steps), 0
         self.axes, self.buttons = {}, {}
         self.servo = 1
         self.ready = False
         self.armed = False
         self.stopped = False
+
+    @property
+    def step(self):
+        return self.steps[self.step_index]
 
     def direction(self):
         value = self.axes.get(self.axis, 0)
@@ -58,6 +64,11 @@ class Controls:
                     and not self.buttons.get(self.enable, False)
                     and self.direction() == 0):
                 self.servo = number + 1
+            if (number == self.step_button and value and not initial
+                    and not self.buttons.get(self.enable, False)
+                    and self.direction() == 0):
+                # Same rule as joint selection: never change while moving.
+                self.step_index = (self.step_index + 1) % len(self.steps)
 
     def settle(self):
         # Called only after the entire input queue is drained.
@@ -78,11 +89,12 @@ class Jogger:
         self.angles = read_angles(arm)
         self.pending = None
         self.last_write = 0.0
+        self.wait = MOVE_MS / 1000 + 0.1
         self.stalls = 0
 
-    def tick(self, servo, direction, refresh=None):
+    def tick(self, servo, direction, refresh=None, step=STEP_DEGREES):
         if self.pending:
-            if self.clock() - self.last_write < MOVE_MS / 1000 + 0.1:
+            if self.clock() - self.last_write < self.wait:
                 return
             old, target, moved_servo = self.pending
             self.angles = read_angles(self.arm)
@@ -103,11 +115,16 @@ class Jogger:
         if not direction:
             return
         old = self.angles[servo]
-        target = old + direction * STEP_DEGREES
-        if not 0 <= target <= (270 if servo == 5 else 180):
+        limit = 270 if servo == 5 else 180
+        # Stop at the SDK range instead of refusing a step that would overshoot.
+        target = min(max(old + direction * step, 0), limit)
+        if target == old:
             return
-        self.arm.Arm_serial_servo_write(servo, target, MOVE_MS)
+        # Larger steps get proportionally more time so the speed stays moderate.
+        move_ms = max(MOVE_MS, 100 * abs(target - old))
+        self.arm.Arm_serial_servo_write(servo, target, move_ms)
         self.last_write = self.clock()
+        self.wait = move_ms / 1000 + 0.1
         self.pending = (old, target, servo)
         print('Servo {}: {} -> {}'.format(servo, old, target), flush=True)
 
@@ -130,13 +147,13 @@ def drain(fd, controls, monitor):
     raise RuntimeError('Input queue could not be drained; stopping')
 
 
-def loop(fd, controls, jogger, seconds):
+def loop(fd, controls, jogger, seconds, status=None):
     def refresh():
         drain(fd, controls, monitor=False)
         return controls.servo, controls.request()
 
     start = time.monotonic()
-    previous_servo = None
+    previous_servo = previous_step = None
     while not seconds or time.monotonic() - start < seconds:
         select.select([fd], [], [], 0.02)
         drain(fd, controls, monitor=jogger is None)
@@ -146,8 +163,27 @@ def loop(fd, controls, jogger, seconds):
         if previous_servo != controls.servo:
             print('Selected servo {}'.format(controls.servo), flush=True)
             previous_servo = controls.servo
+        if previous_step != controls.step:
+            if previous_step is not None:
+                print('Step {} deg'.format(controls.step), flush=True)
+            previous_step = controls.step
+        if status:
+            status()
         if jogger:
-            jogger.tick(controls.servo, controls.request(), refresh)
+            jogger.tick(controls.servo, controls.request(), refresh, controls.step)
+
+
+def stream_status(stream, controls, jogger):
+    def update():
+        if stream.error:
+            raise RuntimeError(stream.error + '; stopping')
+        stream.set_status([
+            'servo {}  step {} deg  {}'.format(
+                controls.servo, controls.step,
+                'STOP' if controls.stopped else 'MOVE' if controls.armed else 'idle'),
+            'angles ' + ' '.join(str(jogger.angles[n]) for n in range(1, 7)),
+        ])
+    return update
 
 
 def main():
@@ -160,11 +196,28 @@ def main():
     parser.add_argument('--invert', action='store_true')
     parser.add_argument('--seconds', type=float, default=0,
                         help='exit after this many seconds; 0 runs until stopped')
+    parser.add_argument('--steps', default='1,3,6',
+                        help='step sizes in degrees to cycle through, each 1..10')
+    parser.add_argument('--step-button', type=int, default=8,
+                        help='button that cycles the step size (not used if absent)')
+    parser.add_argument('--stream', type=int, default=0, metavar='PORT',
+                        help='serve the camera view on this port (e.g. 8080)')
+    parser.add_argument('--bind', default='0.0.0.0',
+                        help='address for --stream; 127.0.0.1 limits it to the Pi')
+    parser.add_argument('--camera', type=int, default=0, help='camera index')
     args = parser.parse_args()
+    try:
+        steps = tuple(int(part) for part in args.steps.split(','))
+    except ValueError:
+        steps = ()
     if (not 0 <= args.seconds <= 86400 or args.axis < 0
             or min(args.enable_button, args.stop_button) < 6
-            or args.enable_button == args.stop_button):
-        parser.error('invalid controls/duration; reserve buttons 0..5 for joint selection')
+            or args.enable_button == args.stop_button
+            or args.step_button < 6
+            or args.step_button in (args.enable_button, args.stop_button)
+            or not steps or not all(1 <= step <= 10 for step in steps)
+            or not 0 <= args.stream <= 65535):
+        parser.error('invalid controls/duration/steps; reserve buttons 0..5 for joint selection')
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(143))
     fd = None
     try:
@@ -175,17 +228,33 @@ def main():
         print('Joystick: {} axes, {} buttons'.format(axes[0], buttons[0]), flush=True)
         if args.move and (args.axis >= axes[0] or max(args.enable_button, args.stop_button) >= buttons[0]):
             raise RuntimeError('Configured control index is absent on this joystick')
-        controls = Controls(args.axis, args.enable_button, args.stop_button, args.invert)
+        step_button = args.step_button if args.step_button < buttons[0] else None
+        if step_button is None and len(steps) > 1:
+            print('No button {}: step stays {} deg'.format(args.step_button, steps[0]),
+                  flush=True)
+        controls = Controls(args.axis, args.enable_button, args.stop_button,
+                            args.invert, step_button, steps if step_button else steps[:1])
         if not args.move:
             print('INPUT ONLY: no SDK is loaded and no motor commands are sent.', flush=True)
             loop(fd, controls, None, args.seconds)
         else:
             with exclusive_arm():
-                from Arm_Lib import Arm_Device
-                jogger = Jogger(Arm_Device())
-                print('Angles: {}'.format(jogger.angles), flush=True)
-                print('Center stick and release enable first. Hold enable, then move stick.', flush=True)
-                loop(fd, controls, jogger, args.seconds)
+                stream = None
+                try:
+                    if args.stream:
+                        from camera_stream import CameraStream
+                        stream = CameraStream(args.stream, args.bind, args.camera)
+                        print('Camera view: http://<pi-address>:{}/'.format(args.stream),
+                              flush=True)
+                    from Arm_Lib import Arm_Device
+                    jogger = Jogger(Arm_Device())
+                    print('Angles: {}'.format(jogger.angles), flush=True)
+                    print('Center stick and release enable first. Hold enable, then move stick.', flush=True)
+                    loop(fd, controls, jogger, args.seconds,
+                         stream_status(stream, controls, jogger) if stream else None)
+                finally:
+                    if stream:
+                        stream.close()
         return 0
     except KeyboardInterrupt:
         print('Interrupted: no further commands')

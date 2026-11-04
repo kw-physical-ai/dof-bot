@@ -115,6 +115,41 @@ class JoystickTests(unittest.TestCase):
             self.tick(j, 2, 1, 1)
         self.assertEqual(len(arm.writes), 1)
 
+    def test_step_button_cycles_only_when_idle(self):
+        c = Controls(step_button=8, steps=(1, 3, 6))
+        for event in ((INIT | AXIS, 0, 0), (INIT | BUTTON, 6, 0)):
+            c.event(*event)
+        c.settle()
+        self.assertEqual(c.step, 1)
+        c.event(BUTTON, 8, 1)
+        c.event(BUTTON, 8, 0)
+        self.assertEqual(c.step, 3)
+        c.event(BUTTON, 6, 1)
+        c.event(BUTTON, 8, 1)
+        self.assertEqual(c.step, 3)
+
+    def test_larger_step_moves_more_with_proportional_time(self):
+        arm = FakeArm()
+        j = Jogger(arm)
+        j.clock = lambda: 1
+        j.tick(1, 1, step=6)
+        self.assertEqual(arm.writes, [(1, 96, 600)])
+        j.clock = lambda: 1.2
+        j.tick(1, 1, step=6)
+        self.assertEqual(len(arm.writes), 1)
+        j.clock = lambda: 1.8
+        j.tick(1, 1, step=6)
+        self.assertEqual(arm.writes[-1], (1, 102, 600))
+
+    def test_step_is_clamped_at_range_end(self):
+        arm = FakeArm()
+        arm.angles[1] = 178
+        j = Jogger(arm)
+        self.tick(j, 1, 1, 0)
+        j.clock = lambda: 2
+        j.tick(1, 1, step=6)
+        self.assertEqual(arm.writes, [(1, 180, 250)])
+
     def test_disconnected_input_raises(self):
         fd, writer = os.pipe()
         os.close(writer)
