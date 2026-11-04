@@ -124,8 +124,9 @@ class GamepadTests(unittest.TestCase):
             os.close(write_fd)
         self.assertIn('Motion paused', out.getvalue())
         self.assertIn('Stop button', out.getvalue())
-        # Three unanswered commands, then no more writes while the key stays held.
-        self.assertEqual(len(arm.writes), 3)
+        # A 3-degree command the arm ignores is caught at the first check; after
+        # that nothing more is written although the key stays held.
+        self.assertEqual(len(arm.writes), 1)
 
 
 if __name__ == '__main__':
