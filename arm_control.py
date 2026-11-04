@@ -3,14 +3,28 @@
 import fcntl
 import math
 import subprocess
+import time
 from contextlib import contextmanager
 from pathlib import Path
+
+
+def read_angle_retry(arm, servo, attempts=3):
+    # The SDK returns None for a missed answer. The vendor examples read again
+    # once; a servo that never answers still fails after the last attempt.
+    value = None
+    for attempt in range(attempts):
+        value = arm.Arm_serial_servo_read(servo)
+        if value is not None:
+            break
+        if attempt + 1 < attempts:
+            time.sleep(0.01)
+    return value
 
 
 def read_angles(arm):
     angles = {}
     for servo in range(1, 7):
-        value = arm.Arm_serial_servo_read(servo)
+        value = read_angle_retry(arm, servo)
         limit = 270 if servo == 5 else 180
         if (isinstance(value, bool) or not isinstance(value, (int, float))
                 or not math.isfinite(value) or not 0 <= value <= limit):

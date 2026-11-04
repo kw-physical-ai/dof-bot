@@ -159,3 +159,36 @@ class CameraStream:
         server = ThreadingHTTPServer((bind, port), Handler)
         server.daemon_threads = True
         return server
+
+
+def main():
+    """Camera check without any motor: python3 camera_stream.py --port 8080"""
+    import argparse
+    parser = argparse.ArgumentParser(description=main.__doc__)
+    parser.add_argument('--port', type=int, default=8080)
+    parser.add_argument('--bind', default='0.0.0.0')
+    parser.add_argument('--camera', type=int, default=0)
+    args = parser.parse_args()
+    if not 1 <= args.port <= 65535:
+        parser.error('invalid port')
+    try:
+        stream = CameraStream(args.port, args.bind, args.camera)
+    except (OSError, RuntimeError) as exc:
+        print(exc)
+        return 1
+    print('Camera view: http://<pi-address>:{}/  (Ctrl+C to stop)'.format(args.port),
+          flush=True)
+    try:
+        while not stream.error:
+            time.sleep(0.5)
+            stream.set_status(['camera check only: no motor commands'])
+        print(stream.error)
+        return 1
+    except KeyboardInterrupt:
+        return 0
+    finally:
+        stream.close()
+
+
+if __name__ == '__main__':
+    raise SystemExit(main())

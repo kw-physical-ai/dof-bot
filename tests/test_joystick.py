@@ -150,6 +150,23 @@ class JoystickTests(unittest.TestCase):
         j.tick(1, 1, step=6)
         self.assertEqual(arm.writes, [(1, 180, 250)])
 
+    def test_transient_missing_read_is_retried_but_dead_servo_still_stops(self):
+        arm = FakeArm()
+        original = arm.Arm_serial_servo_read
+        calls = {'n': 0}
+
+        def flaky(servo):
+            if servo == 6:
+                calls['n'] += 1
+                if calls['n'] == 1:
+                    return None
+            return original(servo)
+        arm.Arm_serial_servo_read = flaky
+        self.assertEqual(read_angles(arm)[6], 90)
+        arm.Arm_serial_servo_read = lambda servo: None if servo == 1 else original(servo)
+        with self.assertRaises(RuntimeError):
+            read_angles(arm)
+
     def test_disconnected_input_raises(self):
         fd, writer = os.pipe()
         os.close(writer)
