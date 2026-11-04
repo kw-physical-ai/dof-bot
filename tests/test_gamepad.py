@@ -51,12 +51,13 @@ class GamepadTests(unittest.TestCase):
 
     def test_step_cycles_only_when_idle(self):
         pad = self.neutral()
+        self.assertEqual(pad.step, 3)
         pad.event(BUTTON, 9, 1)
         pad.event(BUTTON, 9, 0)
-        self.assertEqual(pad.step, 3)
+        self.assertEqual(pad.step, 6)
         pad.event(BUTTON, 6, 1)
         pad.event(BUTTON, 9, 1)
-        self.assertEqual(pad.step, 3)
+        self.assertEqual(pad.step, 6)
 
     def test_plan_clamps_and_blocks_leaving_the_limit(self):
         angles = {n: 90 for n in range(1, 7)}

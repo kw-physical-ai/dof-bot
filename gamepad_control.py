@@ -6,7 +6,7 @@ L1 / L2     -> servo 3 (elbow)  - / +
 R1 / R2     -> servo 4 (wrist)  - / +
 Keys 2 / 4  -> servo 5 (roll)   + / -     (button numbers 1 / 3)
 Keys 1 / 3  -> servo 6 (gripper) + / -    (button numbers 0 / 2)
-START cycles the step size, SELECT stops the program.
+START cycles the step size (3, 6, 10 degrees), SELECT stops the program.
 
 Unlike the vendor example this starts from the angles it reads, ignores input
 until the sticks are centered and buttons released, and stops if a joint does
@@ -34,7 +34,7 @@ BUTTON_MAP = {6: ((0,), (2,)), 5: ((1,), (3,)), 3: ((6,), (4,)), 4: ((7,), (5,))
 
 
 class Pad:
-    def __init__(self, stop=8, step_button=9, steps=(1, 3, 6), invert=()):
+    def __init__(self, stop=8, step_button=9, steps=(3, 6, 10), invert=()):
         self.stop, self.step_button = stop, step_button
         self.steps, self.step_index = tuple(steps), 0
         self.invert = set(invert)
@@ -188,7 +188,9 @@ def main():
     parser.add_argument('--move', action='store_true', help='actually move the motors')
     parser.add_argument('--stop-button', type=int, default=8)
     parser.add_argument('--step-button', type=int, default=9)
-    parser.add_argument('--steps', default='1,3,6', help='step sizes in degrees, each 1..10')
+    parser.add_argument('--steps', default='3,6,10',
+                        help='step sizes in degrees, each 1..10; 1 degree is often below '
+                             'what a servo reacts to')
     parser.add_argument('--invert', default='', help='servos whose direction to flip, e.g. 1,2')
     parser.add_argument('--limit', action='append', default=[], metavar='SERVO:MIN:MAX',
                         help='restrict a servo, e.g. 2:40:180 (repeatable)')

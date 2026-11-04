@@ -196,8 +196,9 @@ def main():
     parser.add_argument('--invert', action='store_true')
     parser.add_argument('--seconds', type=float, default=0,
                         help='exit after this many seconds; 0 runs until stopped')
-    parser.add_argument('--steps', default='1,3,6',
-                        help='step sizes in degrees to cycle through, each 1..10')
+    parser.add_argument('--steps', default='3,6,10',
+                        help='step sizes in degrees to cycle through, each 1..10 '
+                             '(1 degree is often below what a servo reacts to)')
     parser.add_argument('--step-button', type=int, default=8,
                         help='button that cycles the step size (not used if absent)')
     parser.add_argument('--stream', type=int, default=0, metavar='PORT',
