@@ -19,9 +19,16 @@ NAMES = {1: 'base', 2: 'shoulder', 3: 'elbow', 4: 'wrist', 5: 'wrist roll', 6: '
 def main():
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument('--servo', type=int, default=1, choices=range(1, 7), metavar='1-6',
-                        help='servo whose angle is shown while you turn it (default 1)')
+    parser.add_argument('--servo', default='1',
+                        help='servo numbers to show while you turn them, e.g. 1 or 1,2 '
+                             '(default 1)')
     args = parser.parse_args()
+    try:
+        servos = sorted({int(part) for part in args.servo.split(',')})
+    except ValueError:
+        servos = []
+    if not servos or not all(1 <= servo <= 6 for servo in servos):
+        parser.error('--servo must be numbers 1..6, like 1 or 1,2')
     try:
         with exclusive_arm():
             from Arm_Lib import Arm_Device
@@ -36,19 +43,20 @@ def main():
             try:
                 arm.Arm_serial_set_torque(0)
                 released = True
-                print('Torque OFF. Turn servo {} ({}) by hand slowly. Aim for 0..180, '
-                      'about 90 is centered. Ctrl+C locks the arm in place.'.format(
-                          args.servo, NAMES[args.servo]), flush=True)
+                print('Torque OFF. Turn the joints by hand slowly. Servo 1 aims for 0..180 '
+                      '(about 90 is centered). Ctrl+C locks the arm in place.', flush=True)
                 while True:
-                    try:
-                        angle = arm.Arm_serial_servo_read_any(args.servo)
-                        value = arm.Arm_serial_servo_read(args.servo)
-                    except Exception as exc:
-                        angle, value = None, 'error: {}'.format(exc)
-                    inside = isinstance(value, (int, float))
-                    print('angle {:>5}   read {:>5}   {}'.format(
-                        str(angle), str(value), 'in range' if inside else 'OUT OF RANGE'),
-                        flush=True)
+                    parts = []
+                    for servo in servos:
+                        try:
+                            angle = arm.Arm_serial_servo_read_any(servo)
+                            value = arm.Arm_serial_servo_read(servo)
+                        except Exception as exc:
+                            angle, value = None, 'err'
+                        mark = 'ok' if isinstance(value, (int, float)) else 'OUT'
+                        parts.append('[{} {}] angle {:>4} read {:>4} {}'.format(
+                            servo, NAMES[servo], str(angle), str(value), mark))
+                    print('   '.join(parts), flush=True)
                     time.sleep(0.3)
             except KeyboardInterrupt:
                 pass
