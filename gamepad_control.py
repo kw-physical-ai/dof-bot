@@ -9,8 +9,8 @@ Keys 1 / 3  -> servo 6 (gripper) + / -    (button numbers 0 / 2)
 START cycles the step size (3, 6, 10 degrees), SELECT stops the program.
 
 Unlike the vendor example this starts from the angles it reads, ignores input
-until the sticks are centered and buttons released, and stops if a joint does
-not follow its command. Button numbers are Linux joystick numbers: check them
+until the sticks are centered and buttons released, and pauses (the program
+keeps running) if a joint does not follow its command. Button numbers are Linux joystick numbers: check them
 with joystick_control.py (input-only mode) first.
 """
 
@@ -99,6 +99,10 @@ def plan(angles, request, step, limits):
     return targets
 
 
+class InputError(RuntimeError):
+    """The controller itself failed: this ends the program."""
+
+
 def drain(fd, pad):
     for _ in range(4096):
         try:
@@ -107,10 +111,10 @@ def drain(fd, pad):
             pad.settle()
             return
         if len(data) != EVENT.size:
-            raise RuntimeError('Joystick disconnected or incomplete event')
+            raise InputError('Joystick disconnected or incomplete event')
         _, value, kind, number = EVENT.unpack(data)
         pad.event(kind, number, value)
-    raise RuntimeError('Input queue could not be drained; stopping')
+    raise InputError('Input queue could not be drained; stopping')
 
 
 def run(fd, pad, arm, limits, stream):
@@ -120,6 +124,7 @@ def run(fd, pad, arm, limits, stream):
     pending, stalls = {}, {servo: 0 for servo in RANGES}
     last_write = wait = 0.0
     shown_step = None
+    faulted = False
     while True:
         select.select([fd], [], [], 0.02)
         drain(fd, pad)
@@ -134,37 +139,52 @@ def run(fd, pad, arm, limits, stream):
             if stream.error:
                 raise RuntimeError(stream.error + '; stopping')
             stream.set_status(['gamepad  step {} deg  {}'.format(
-                pad.step, 'MOVE' if pad.request() else 'idle'),
+                pad.step, 'PAUSED' if faulted else 'MOVE' if pad.request() else 'idle'),
                 'angles ' + ' '.join(str(angles[n]) for n in range(1, 7))])
-        if pending and time.monotonic() - last_write >= wait:
+        if pad.ready:
+            faulted = False
+        try:
+            if pending and time.monotonic() - last_write >= wait:
+                angles = read_angles(arm)
+                for servo, (old, target) in pending.items():
+                    actual = angles[servo]
+                    if abs(actual - target) > 2 or (actual - old) * (target - old) < 0:
+                        raise RuntimeError('Servo {} did not follow the command'.format(servo))
+                    stalls[servo] = stalls[servo] + 1 if actual == old else 0
+                    if stalls[servo] >= 3:
+                        raise RuntimeError('Servo {}: three commands without movement'.format(servo))
+                pending = {}
+            if pending or not pad.request():
+                continue
             angles = read_angles(arm)
-            for servo, (old, target) in pending.items():
-                actual = angles[servo]
-                if abs(actual - target) > 2 or (actual - old) * (target - old) < 0:
-                    raise RuntimeError('Servo {} did not follow the command; stopping'.format(servo))
-                stalls[servo] = stalls[servo] + 1 if actual == old else 0
-                if stalls[servo] >= 3:
-                    raise RuntimeError('Servo {}: three commands without movement; stopping'.format(servo))
+            drain(fd, pad)  # Reading takes time: honor a release or stop that arrived.
+            if pad.stopped:
+                print('Stop button: no further commands')
+                return
+            targets = plan(angles, pad.request(), pad.step, limits)
+            durations = []
+            for servo, target in targets.items():
+                move_ms = max(MOVE_MS, 100 * abs(target - angles[servo]))
+                arm.Arm_serial_servo_write(servo, target, move_ms)
+                durations.append(move_ms)
+                pending[servo] = (angles[servo], target)
+            if targets:
+                last_write = time.monotonic()
+                wait = max(durations) / 1000 + 0.1
+                print('  '.join('S{}: {}->{}'.format(s, angles[s], t)
+                                for s, t in sorted(targets.items())), flush=True)
+        except InputError:
+            raise
+        except RuntimeError as exc:
+            # A failed check pauses motion; the program and camera stay up.
+            # Motion resumes only after every stick and key was released once.
             pending = {}
-        if pending or not pad.request():
-            continue
-        angles = read_angles(arm)
-        drain(fd, pad)  # Reading takes time: honor a release or stop that arrived.
-        if pad.stopped:
-            print('Stop button: no further commands')
-            return
-        targets = plan(angles, pad.request(), pad.step, limits)
-        durations = []
-        for servo, target in targets.items():
-            move_ms = max(MOVE_MS, 100 * abs(target - angles[servo]))
-            arm.Arm_serial_servo_write(servo, target, move_ms)
-            durations.append(move_ms)
-            pending[servo] = (angles[servo], target)
-        if targets:
-            last_write = time.monotonic()
-            wait = max(durations) / 1000 + 0.1
-            print('  '.join('S{}: {}->{}'.format(s, angles[s], t)
-                            for s, t in sorted(targets.items())), flush=True)
+            stalls = {servo: 0 for servo in RANGES}
+            pad.ready = False
+            if not faulted:
+                print('WARNING: {}. Motion paused: release every stick and key to '
+                      'resume.'.format(exc), flush=True)
+                faulted = True
 
 
 def parse_limits(values):
@@ -240,7 +260,7 @@ def main():
     except KeyboardInterrupt:
         print('Interrupted: no further commands')
         return 130
-    except (OSError, RuntimeError, ValueError, subprocess.SubprocessError) as exc:
+    except (OSError, RuntimeError, ValueError, subprocess.SubprocessError) as exc:  # includes InputError
         print(str(exc), file=sys.stderr)
         return 1
     finally:
