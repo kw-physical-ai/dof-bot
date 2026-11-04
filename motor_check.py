@@ -28,7 +28,13 @@ def check(arm, servo, reads, gap):
         except Exception:
             values.append(None)
         time.sleep(gap)
-    return ping, values
+    try:
+        # Same conversion without the 0..180 range check: shows where a servo
+        # that reads None really is (for example -20 or 200 degrees).
+        unbounded = arm.Arm_serial_servo_read_any(servo)
+    except Exception:
+        unbounded = None
+    return ping, values, unbounded
 
 
 def verdict(values):
@@ -36,6 +42,9 @@ def verdict(values):
     if not good:
         return 'NO DATA'
     if len(good) < len(values):
+        # Only the very first read missed: a warm-up miss, not a loose cable.
+        if values[0] is None and None not in values[1:]:
+            return 'OK' if max(good) - min(good) <= 2 else 'UNSTABLE'
         return 'INTERMITTENT'
     if max(good) - min(good) > 2:
         return 'UNSTABLE'
@@ -52,14 +61,15 @@ def describe_ping(ping):
 
 def advice(results):
     notes = []
-    for servo, (ping, values, state) in results.items():
+    for servo, (ping, values, state, unbounded) in results.items():
         label = 'Servo {} ({})'.format(servo, NAMES[servo])
         if state == 'NO DATA' and ping != PING_OK:
             notes.append('{}: no answer. Check the servo cable at its port and the '
                          'motor power switch/adapter.'.format(label))
         elif state == 'NO DATA':
-            notes.append('{}: answers ping but angle is outside the readable range '
-                         '(SDK returns None). Check whether it is at a mechanical end.'.format(label))
+            notes.append('{}: answers ping but the angle is outside the readable range '
+                         '(unbounded estimate: {}). Look at where the joint physically '
+                         'sits: it may be turned past its end.'.format(label, unbounded))
         elif state == 'INTERMITTENT':
             notes.append('{}: answers only sometimes. Reseat the cable; check power.'.format(label))
         elif state == 'UNSTABLE':
@@ -80,13 +90,13 @@ def main():
             arm = Arm_Device()
             time.sleep(0.2)
             results = {}
-            print('servo  name         ping       state         reads')
+            print('servo  name         ping       state         unbounded  reads')
             for servo in range(1, 7):
-                ping, values = check(arm, servo, args.reads, args.gap)
+                ping, values, unbounded = check(arm, servo, args.reads, args.gap)
                 state = verdict(values)
-                results[servo] = (ping, values, state)
-                print('{:<6} {:<12} {:<10} {:<13} {}'.format(
-                    servo, NAMES[servo], describe_ping(ping), state, values))
+                results[servo] = (ping, values, state, unbounded)
+                print('{:<6} {:<12} {:<10} {:<13} {:<10} {}'.format(
+                    servo, NAMES[servo], describe_ping(ping), state, str(unbounded), values))
     except Exception as exc:
         print('Arm access failed: {}'.format(exc), file=sys.stderr)
         return 1
