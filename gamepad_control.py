@@ -25,10 +25,14 @@ import sys
 import time
 
 from arm_control import exclusive_arm, read_angles
+from camera_stream import parse_cameras
 from joystick_control import AXIS, BUTTON, EVENT, INIT, MOVE_MS
 
 DEADZONE = 10000
 RANGES = {1: (0, 180), 2: (0, 180), 3: (0, 180), 4: (0, 180), 5: (0, 270), 6: (0, 180)}
+# A servo that stops at its end can read slightly past it, and the SDK then calls
+# the angle unavailable. Keep default targets a little inside the range.
+EDGE = 3
 # servo -> (buttons that raise the angle, buttons that lower it)
 BUTTON_MAP = {6: ((0,), (2,)), 5: ((1,), (3,)), 3: ((6,), (4,)), 4: ((7,), (5,))}
 
@@ -117,9 +121,56 @@ def drain(fd, pad):
     raise InputError('Input queue could not be drained; stopping')
 
 
-def run(fd, pad, arm, limits, stream):
-    angles = read_angles(arm)
+def parse_starts(values, limits):
+    """--start 1:90 -> [(1, 90)]; the angle must be inside the servo's limit."""
+    starts = []
+    for text in values:
+        try:
+            servo, angle = (int(part) for part in text.split(':'))
+        except ValueError:
+            raise ValueError('--start must look like 1:90')
+        if servo not in limits or any(servo == s for s, _ in starts):
+            raise ValueError('--start {} names an unknown or repeated servo'.format(text))
+        low, high = limits[servo]
+        if not low <= angle <= high:
+            raise ValueError('--start {} is outside the limit {}..{}'.format(text, low, high))
+        starts.append((servo, angle))
+    return starts
+
+
+def go_to_start(arm, starts, limits):
+    """Move the chosen servos to their start angle in small checked steps."""
+    for servo, target in starts:
+        for _ in range(40):
+            angle = read_angles(arm, recover=True)[servo]
+            if abs(angle - target) <= 2:
+                break
+            step = max(-10, min(10, target - angle))
+            if abs(target - angle - step) <= 2:
+                step = target - angle  # Land on the target instead of stopping 2 short.
+            goal = angle + step
+            move_ms = max(MOVE_MS, 100 * abs(goal - angle))
+            arm.Arm_serial_servo_write(servo, goal, move_ms)
+            time.sleep(move_ms / 1000 + 0.1)
+            after = read_angles(arm, recover=True)[servo]
+            if abs(after - goal) > 2 or (after - angle) * (goal - angle) <= 0:
+                raise RuntimeError('Servo {} did not follow the start move'.format(servo))
+        else:
+            raise RuntimeError('Servo {} did not reach its start angle'.format(servo))
+        print('Start: servo {} at {}'.format(servo, target), flush=True)
+
+
+def run(fd, pad, arm, limits, stream, starts=None):
+    angles = read_angles(arm, recover=True)
     print('Angles: {}'.format(angles), flush=True)
+    for servo, angle in sorted(angles.items()):
+        if not RANGES[servo][0] <= angle <= RANGES[servo][1]:
+            print('Servo {} reads {}, outside its range: it can only move back in.'.format(
+                servo, angle), flush=True)
+    if starts:
+        go_to_start(arm, starts, limits)
+        angles = read_angles(arm, recover=True)
+        print('Angles: {}'.format(angles), flush=True)
     print('Center the sticks and release all keys first.', flush=True)
     pending, stalls = {}, {servo: 0 for servo in RANGES}
     last_write = wait = 0.0
@@ -145,7 +196,7 @@ def run(fd, pad, arm, limits, stream):
             faulted = False
         try:
             if pending and time.monotonic() - last_write >= wait:
-                angles = read_angles(arm)
+                angles = read_angles(arm, recover=True)
                 for servo, (old, target) in pending.items():
                     actual = angles[servo]
                     if abs(actual - target) > 2 or (actual - old) * (target - old) < 0:
@@ -156,7 +207,7 @@ def run(fd, pad, arm, limits, stream):
                 pending = {}
             if pending or not pad.request():
                 continue
-            angles = read_angles(arm)
+            angles = read_angles(arm, recover=True)
             drain(fd, pad)  # Reading takes time: honor a release or stop that arrived.
             if pad.stopped:
                 print('Stop button: no further commands')
@@ -188,7 +239,7 @@ def run(fd, pad, arm, limits, stream):
 
 
 def parse_limits(values):
-    limits = dict(RANGES)
+    limits = {servo: (low + EDGE, high - EDGE) for servo, (low, high) in RANGES.items()}
     for text in values:
         try:
             servo, low, high = (int(part) for part in text.split(':'))
@@ -214,14 +265,20 @@ def main():
     parser.add_argument('--invert', default='', help='servos whose direction to flip, e.g. 1,2')
     parser.add_argument('--limit', action='append', default=[], metavar='SERVO:MIN:MAX',
                         help='restrict a servo, e.g. 2:40:180 (repeatable)')
+    parser.add_argument('--start', action='append', default=[], metavar='SERVO:ANGLE',
+                        help='move this servo to the angle before accepting input, '
+                             'e.g. 1:90 (repeatable)')
     parser.add_argument('--stream', type=int, default=0, metavar='PORT')
     parser.add_argument('--bind', default='0.0.0.0')
-    parser.add_argument('--camera', type=int, default=0)
+    parser.add_argument('--camera', default='0',
+                        help='camera numbers or device paths, comma separated, e.g. 0,1')
     args = parser.parse_args()
     try:
         steps = tuple(int(p) for p in args.steps.split(','))
         invert = [int(p) for p in args.invert.split(',') if p]
         limits = parse_limits(args.limit)
+        cameras = parse_cameras(args.camera)
+        starts = parse_starts(args.start, limits)
     except ValueError as exc:
         parser.error(str(exc))
     if (not steps or not all(1 <= s <= 10 for s in steps)
@@ -249,10 +306,10 @@ def main():
             try:
                 if args.stream:
                     from camera_stream import CameraStream
-                    stream = CameraStream(args.stream, args.bind, args.camera)
+                    stream = CameraStream(args.stream, args.bind, cameras)
                     print('Camera view: http://<pi-address>:{}/'.format(args.stream), flush=True)
                 from Arm_Lib import Arm_Device
-                run(fd, pad, Arm_Device(), limits, stream)
+                run(fd, pad, Arm_Device(), limits, stream, starts)
             finally:
                 if stream:
                     stream.close()
