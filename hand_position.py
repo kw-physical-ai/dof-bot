@@ -10,7 +10,7 @@ import argparse
 import sys
 import time
 
-from arm_control import exclusive_arm
+from arm_control import exclusive_arm, open_arm
 
 
 NAMES = {1: 'base', 2: 'shoulder', 3: 'elbow', 4: 'wrist', 5: 'wrist roll', 6: 'gripper'}
@@ -31,8 +31,7 @@ def main():
         parser.error('--servo must be numbers 1..6, like 1 or 1,2')
     try:
         with exclusive_arm():
-            from Arm_Lib import Arm_Device
-            arm = Arm_Device()
+            arm = open_arm()
             time.sleep(0.2)
             print('Every joint will go limp and the arm may drop or swing.')
             print('Clear the space, hold the arm up with one hand, keep cables free.')

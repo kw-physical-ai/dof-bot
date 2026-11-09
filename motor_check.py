@@ -9,7 +9,7 @@ import argparse
 import sys
 import time
 
-from arm_control import exclusive_arm
+from arm_control import exclusive_arm, open_arm
 
 
 PING_OK = 0xDA  # Arm_Lib: normal answer; 0 means no data from the servo.
@@ -108,8 +108,7 @@ def main():
         parser.error('--reads must be 1..100 and --gap 0..2')
     try:
         with exclusive_arm():
-            from Arm_Lib import Arm_Device
-            arm = Arm_Device()
+            arm = open_arm()
             time.sleep(0.2)
             if args.watch:
                 return watch(arm, args.watch)

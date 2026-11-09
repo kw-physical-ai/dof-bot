@@ -1,5 +1,12 @@
 # USB 카메라와 CSI 카메라 추가 연결
 
+> **Pi 5 사용 시**: 이 문서의 1~2절은 Pi 4 + 제조사 Ubuntu 20.04의 **구형 카메라 설정** 기록이다. Pi 5에서는 `raspistill`, `vcgencmd get_camera`, `bcm2835_v4l2`, `start_x=1`이 동작하지 않으므로 따라 하지 않는다.
+>
+> - 현재 팀 설정은 **USB 카메라, `--camera 0`**이다. USB 카메라는 Pi 5에서도 OpenCV로 그대로 연다.
+> - Pi 5는 카메라와 무관한 영상 노드(`pispbe`, `rpi-hevc`, CSI를 연결하면 `rp1-cfe`)를 많이 만든다. `python3 preflight.py`의 카메라 목록이나 `v4l2-ctl --list-devices`로 USB 카메라가 `/dev/video0`인지 확인한다.
+> - 번호가 자꾸 바뀌면 `ls /dev/v4l/by-id/`에서 `...-video-index0`로 끝나는 경로를 `--camera`에 그대로 넣는다.
+> - CSI V1.3을 Pi 5에 붙이려면 22핀↔15핀 변환 케이블이 필요하다. 확인은 `rpicam-hello --list-cameras`로 하고, 영상은 `picamera2`로 읽어야 한다. `camera_stream.py`는 CSI 노드를 직접 열지 않으며, 그런 노드를 고르면 열기 전에 거부한다. CSI 지원은 아직 코드에 없다.
+
 Raspberry Pi 4에 기존 USB 카메라와 15핀 Camera Module V1.3을 연결하는 절차다. 2026-11-07 제조사 Ubuntu 20.04.3 이미지, 커널 `5.4.0-1050-raspi`, Python 3.8.10 환경에서 확인했다. V1.3은 통상 OV5647 센서를 쓰는 모델이다. 최신 Raspberry Pi OS나 다른 카메라 모델에는 아래 구형 카메라 설정을 그대로 적용하지 않는다.
 
 이 문서는 제조사 OS 설치, SSH·VNC 접속, `~/dof-bot` 저장소와 Python 3·OpenCV·`v4l2-ctl`이 준비된 장비를 전제로 한다. 저장소 준비는 [README.md](README.md#설치와-점검)를 따른다. 이 장비의 OpenCV는 4.8.1이며, 아래 절차는 새 OS의 전체 설치 안내가 아니다.

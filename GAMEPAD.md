@@ -20,6 +20,7 @@
 ```bash
 systemctl is-active yb-bigProgram dofbot_oled   # 원래 상태를 기록
 sudo systemctl stop yb-bigProgram dofbot_oled   # 카메라(/dev/video0)와 I2C 점유 해제
+# Pi 5 이미지에서는 서비스 이름이 다를 수 있다: systemctl list-units | grep -i -E "yb|dofbot"
 python3 motor_check.py                           # 6개가 모두 OK인지 확인
 ```
 
@@ -37,7 +38,7 @@ sudo systemctl start yb-bigProgram dofbot_oled
 python3 gamepad_control.py --move --stream 8080 --limit 2:40:180
 ```
 
-`--camera 번호`로 영상 장치를 선택할 수 있다. 번호를 생략하면 `0`이며, 다른 스트림이 같은 카메라를 사용 중이면 먼저 종료한다. CSI 단독 영상은 확인했지만 CSI와 게임패드의 결합 동작은 아직 실물 검증하지 않았다.
+`--camera 번호`로 영상 장치를 선택할 수 있다. 번호를 생략하면 `0`이며, 번호 대신 `/dev/v4l/by-id/...-video-index0` 같은 경로도 받는다. 다른 스트림이 같은 카메라를 사용 중이면 먼저 종료한다. CSI 단독 영상은 확인했지만 CSI와 게임패드의 결합 동작은 아직 실물 검증하지 않았다.
 
 브라우저에서 `http://<Pi 주소>:8080/`을 열면 카메라 화면에 선택 상태, 이동 단위, 6개 각도, fps가 덧그려진다. 화면은 읽기 전용이며 제어 기능이 없다. `--bind 127.0.0.1`을 주면 Pi 안에서만 열린다. 시작할 때 터미널에 찍히는 `<pi-address>`는 자리표시자다.
 

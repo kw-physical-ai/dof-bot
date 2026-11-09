@@ -24,7 +24,8 @@ import subprocess
 import sys
 import time
 
-from arm_control import exclusive_arm, read_angles
+from arm_control import exclusive_arm, open_arm, read_angles
+from camera_stream import camera_arg
 from joystick_control import AXIS, BUTTON, EVENT, INIT, MOVE_MS
 
 DEADZONE = 10000
@@ -216,7 +217,8 @@ def main():
                         help='restrict a servo, e.g. 2:40:180 (repeatable)')
     parser.add_argument('--stream', type=int, default=0, metavar='PORT')
     parser.add_argument('--bind', default='0.0.0.0')
-    parser.add_argument('--camera', type=int, default=0)
+    parser.add_argument('--camera', type=camera_arg, default=0,
+                        help='camera index (0 = /dev/video0) or a device path')
     args = parser.parse_args()
     try:
         steps = tuple(int(p) for p in args.steps.split(','))
@@ -251,8 +253,7 @@ def main():
                     from camera_stream import CameraStream
                     stream = CameraStream(args.stream, args.bind, args.camera)
                     print('Camera view: http://<pi-address>:{}/'.format(args.stream), flush=True)
-                from Arm_Lib import Arm_Device
-                run(fd, pad, Arm_Device(), limits, stream)
+                run(fd, pad, open_arm(), limits, stream)
             finally:
                 if stream:
                     stream.close()

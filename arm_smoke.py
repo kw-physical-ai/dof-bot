@@ -6,7 +6,7 @@ import sys
 import time
 from typing import Optional
 
-from arm_control import exclusive_arm, read_angles
+from arm_control import exclusive_arm, open_arm, read_angles
 
 
 MAX_STEP_DEGREES = 10
@@ -40,13 +40,13 @@ def read_angle(arm: object, servo: int) -> Optional[int]:
 
 def run(args) -> int:
     try:
-        from Arm_Lib import Arm_Device
+        import Arm_Lib  # noqa: F401  (import check only; open_arm creates the device)
     except ImportError as exc:
         print(f"Arm_Lib import failed: {exc}", file=sys.stderr)
         return 1
 
     try:
-        arm = Arm_Device()
+        arm = open_arm()
         time.sleep(0.1)
         angles = read_angles(arm)
         for servo, angle in angles.items():

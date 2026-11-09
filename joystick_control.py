@@ -12,7 +12,8 @@ import subprocess
 import sys
 import time
 
-from arm_control import exclusive_arm, read_angles
+from arm_control import exclusive_arm, open_arm, read_angles
+from camera_stream import camera_arg
 
 
 EVENT = struct.Struct('=IhBB')
@@ -205,7 +206,9 @@ def main():
                         help='serve the camera view on this port (e.g. 8080)')
     parser.add_argument('--bind', default='0.0.0.0',
                         help='address for --stream; 127.0.0.1 limits it to the Pi')
-    parser.add_argument('--camera', type=int, default=0, help='camera index')
+    parser.add_argument('--camera', type=camera_arg, default=0,
+                        help='camera index (0 = /dev/video0) or a device path such as '
+                             '/dev/v4l/by-id/...-video-index0')
     args = parser.parse_args()
     try:
         steps = tuple(int(part) for part in args.steps.split(','))
@@ -247,8 +250,7 @@ def main():
                         stream = CameraStream(args.stream, args.bind, args.camera)
                         print('Camera view: http://<pi-address>:{}/'.format(args.stream),
                               flush=True)
-                    from Arm_Lib import Arm_Device
-                    jogger = Jogger(Arm_Device())
+                    jogger = Jogger(open_arm())
                     print('Angles: {}'.format(jogger.angles), flush=True)
                     print('Center stick and release enable first. Hold enable, then move stick.', flush=True)
                     loop(fd, controls, jogger, args.seconds,

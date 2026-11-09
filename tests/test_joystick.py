@@ -216,7 +216,8 @@ class JoystickTests(unittest.TestCase):
                             with exclusive_arm():
                                 self.fail('ownership failure must prevent entry')
                 with patch('arm_control.subprocess.run',
-                           return_value=CompletedProcess([], 1, '', '')):
+                           return_value=CompletedProcess([], 1, '', '')), \
+                        patch('arm_control.check_i2c_device'):
                     with exclusive_arm():
                         with self.assertRaises(RuntimeError):
                             with exclusive_arm():
