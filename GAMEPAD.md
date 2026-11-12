@@ -6,7 +6,7 @@
 
 | 파일 | 모터 | 용도 |
 | --- | --- | --- |
-| `gamepad_control.py` | 움직임 | 게임패드로 여러 관절을 동시에 조작. 카메라 화면 선택 |
+| `gamepad_control.py` | 움직임 | 게임패드로 여러 관절을 동시에 조작. USB + OV5647 두 화면 기본 표시 |
 | `joystick_control.py` | 움직임 | 관절 하나씩 선택해 조작 ([JOYSTICK.md](JOYSTICK.md)) |
 | `motor_check.py` | 읽기 전용 | 6개 서보의 ping과 반복 읽기 점검, 한 서보 실시간 감시(`--watch`) |
 | `hand_position.py` | 토크 해제 | 관절을 손으로 돌려 위치를 맞추는 도구. 확인 문구 필요 |
@@ -35,7 +35,7 @@ sudo systemctl start yb-bigProgram dofbot_oled
 ## 게임패드 조작 (`gamepad_control.py`)
 
 ```bash
-python3 gamepad_control.py --move --stream 8080 --limit 2:40:180
+python3 gamepad_control.py
 ```
 
 `--camera 번호`로 영상 장치를 선택할 수 있다. 번호를 생략하면 `0`이며, 번호 대신 `/dev/v4l/by-id/...-video-index0` 같은 경로도 받는다. 다른 스트림이 같은 카메라를 사용 중이면 먼저 종료한다. CSI 단독 영상은 확인했지만 CSI와 게임패드의 결합 동작은 아직 실물 검증하지 않았다.
@@ -49,7 +49,7 @@ python3 gamepad_control.py --move --stream 8080 --limit 2:40:180
 | R1 / R2 | 4번 손목 − / + |
 | 키 번호 1 / 3 | 5번 손목 회전 + / − |
 | 키 번호 0 / 2 | 6번 그리퍼 + / − |
-| START (9) | 이동 단위 순환: 3 → 6 → 10도 (`--steps`로 변경) |
+| START (9) | 기본 3도 유지. `--steps 3,6,10` 지정 시 단위 순환 |
 | SELECT (8) | 종료 |
 
 번호는 Linux 조이스틱 번호이며 제조사 예제(`Dofbot/1.telecontrol/4.arm_handle`)의 배치를 따랐다. 방향이 반대인 관절은 `--invert 1,2`로 뒤집는다.
@@ -92,5 +92,6 @@ python3 gamepad_control.py --move --stream 8080 --limit 2:40:180
 - 컨트롤러 버튼 번호는 기종에 따라 다르다. 먼저 `python3 joystick_control.py --seconds 40`으로 번호를 확인한다.
 - 영상 서버는 기본으로 같은 네트워크의 누구나 볼 수 있다(읽기 전용).
 
-USB와 CAM0 OV5647 측면 영상을 한 화면에 보려면 `--side-csi`를 추가한다.
+게임패드는 인자 없이 실행하면 USB + CAM0 OV5647 두 화면, 포트 8080, 3도 조작을 사용한다.
+장치·포트·관절 제한을 바꿀 때만 옵션을 지정한다. `--usb-only`는 USB만 표시한다.
 [두 카메라 설정·실행 안내](CAMERA.md#pi-5-usb--cam0-ov5647-측면-화면)를 따른다.

@@ -202,11 +202,12 @@ python3 camera_stream.py --camera 0 --side-csi --port 8080
 `/stream`은 USB, `/side/stream`은 OV5647이다. USB 번호가 바뀌면
 `--camera /dev/v4l/by-id/...-video-index0`를 사용한다.
 
+게임패드는 인자 없이 실행하면 두 카메라·8080 포트·3도 단위와 모터 제어를 사용한다.
 모터 제어권과 실제 설치 SDK의 I2C 버스를 확인하고, [게임패드 시작 절차](GAMEPAD.md#시작-전-절차)와
 [조이스틱 안내](JOYSTICK.md)의 입력 매핑 검사를 마친 다음 실행한다. 아래 두 명령은 대안이며 동시에 실행하지 않는다.
 
 ```bash
-python3 gamepad_control.py --move --stream 8080 --camera 0 --side-csi
+python3 gamepad_control.py
 python3 joystick_control.py --move --stream 8080 --camera 0 --side-csi
 ```
 

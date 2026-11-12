@@ -6,7 +6,8 @@ L1 / L2     -> servo 3 (elbow)  - / +
 R1 / R2     -> servo 4 (wrist)  - / +
 Keys 2 / 4  -> servo 5 (roll)   + / -     (button numbers 1 / 3)
 Keys 1 / 3  -> servo 6 (gripper) + / -    (button numbers 0 / 2)
-START cycles the step size (3, 6, 10 degrees), SELECT stops the program.
+Default: USB + OV5647 side preview on port 8080, 3-degree steps.
+SELECT stops the program. --steps can enable START step cycling.
 
 Unlike the vendor example this starts from the angles it reads, ignores input
 until the sticks are centered and buttons released, and pauses (the program
@@ -206,21 +207,23 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--device', default='/dev/input/js0')
-    parser.add_argument('--move', action='store_true', help='actually move the motors')
+    parser.add_argument('--move', action='store_true', help=argparse.SUPPRESS)
     parser.add_argument('--stop-button', type=int, default=8)
     parser.add_argument('--step-button', type=int, default=9)
-    parser.add_argument('--steps', default='3,6,10',
+    parser.add_argument('--steps', default='3',
                         help='step sizes in degrees, each 1..10; 1 degree is often below '
                              'what a servo reacts to')
     parser.add_argument('--invert', default='', help='servos whose direction to flip, e.g. 1,2')
     parser.add_argument('--limit', action='append', default=[], metavar='SERVO:MIN:MAX',
                         help='restrict a servo, e.g. 2:40:180 (repeatable)')
-    parser.add_argument('--stream', type=int, default=0, metavar='PORT')
+    parser.add_argument('--stream', type=int, default=8080, metavar='PORT')
     parser.add_argument('--bind', default='0.0.0.0')
     parser.add_argument('--camera', type=camera_arg, default=0,
                         help='camera index (0 = /dev/video0) or a device path')
-    parser.add_argument('--side-csi', action='store_true',
-                        help='show OV5647 side camera next to USB; requires --stream')
+    parser.add_argument('--side-csi', action='store_true', default=True,
+                        help=argparse.SUPPRESS)
+    parser.add_argument('--usb-only', dest='side_csi', action='store_false',
+                        help='use only USB instead of the default two cameras')
     args = parser.parse_args()
     if args.side_csi and not args.stream:
         parser.error('--side-csi requires --stream PORT')
@@ -236,9 +239,9 @@ def main():
             or args.stop_button == args.step_button
             or not 0 <= args.stream <= 65535):
         parser.error('invalid steps/invert/buttons (0..7 are used for motion)')
-    if not args.move:
-        parser.error('add --move to enable the motors')
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(143))
+    print('Gamepad control: motors enabled after neutral input. SELECT / Ctrl+C stops.',
+          flush=True)
     fd = None
     try:
         fd = os.open(args.device, os.O_RDONLY | os.O_NONBLOCK)
