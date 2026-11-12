@@ -78,6 +78,8 @@ def outside_angle(arm, servo, attempts=3):
     """
     values = []
     for _ in range(attempts):
+        # Let the board finish the previous read before changing read protocol.
+        time.sleep(0.1)
         try:
             value = arm.Arm_serial_servo_read_any(servo)
         except Exception:
