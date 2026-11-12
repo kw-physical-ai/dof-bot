@@ -97,7 +97,7 @@ class GamepadTests(unittest.TestCase):
                 parse_limits([bad])
 
     @unittest.skipIf(os.name == 'nt', 'select() on a pipe needs Linux')
-    def test_failed_check_pauses_instead_of_exiting(self):
+    def test_failed_direction_blocks_repeated_writes_without_exiting(self):
         read_fd, write_fd = os.pipe()
         os.set_blocking(read_fd, False)
 
@@ -122,11 +122,57 @@ class GamepadTests(unittest.TestCase):
             thread.join()
             os.close(read_fd)
             os.close(write_fd)
-        self.assertIn('Motion paused', out.getvalue())
+        self.assertIn('S3 + blocked', out.getvalue())
+        self.assertNotIn('Motion paused', out.getvalue())
         self.assertIn('Stop button', out.getvalue())
         # A 3-degree command the arm ignores is caught at the first check; after
         # that nothing more is written although the key stays held.
         self.assertEqual(len(arm.writes), 1)
+
+
+    def test_reverse_and_other_joint_work_without_neutral_reset(self):
+        class EndStopArm:
+            def __init__(self):
+                self.angles = {s:90 for s in RANGES}
+                self.writes = []
+            def Arm_serial_servo_read(self, servo):
+                return self.angles[servo]
+            def Arm_serial_servo_write(self, servo, target, duration):
+                self.writes.append((servo, target))
+                if servo != 3 or target < self.angles[servo]:
+                    self.angles[servo] = target
+
+        read_fd, write_fd = os.pipe()
+        os.set_blocking(read_fd, False)
+        def send(kind, number, value):
+            os.write(write_fd, struct.pack('=IhBB',0,value,kind,number))
+        def feeder():
+            send(INIT | AXIS,0,0)
+            send(INIT | AXIS,1,0)
+            time.sleep(.1)
+            send(BUTTON,6,1)  # S3+ meets a simulated physical stop
+            time.sleep(.8)   # allow readback to block that direction
+            send(BUTTON,0,1)  # S6+ must work while S3+ remains held
+            time.sleep(.5)
+            send(BUTTON,6,0)
+            send(BUTTON,4,1)  # reverse S3 without releasing S6 / resetting pad
+            time.sleep(1.2)  # pending S6 tick, reverse command, then readback
+            send(BUTTON,8,1)
+        arm, out = EndStopArm(), io.StringIO()
+        thread=threading.Thread(target=feeder)
+        thread.start()
+        try:
+            with contextlib.redirect_stdout(out):
+                run(read_fd,Pad(),arm,parse_limits([]),None)
+        finally:
+            thread.join()
+            os.close(read_fd)
+            os.close(write_fd)
+        self.assertEqual(sum(s==3 and target>90 for s,target in arm.writes),1)
+        self.assertTrue(any(s==6 for s,target in arm.writes))
+        self.assertTrue(any(s==3 and target<90 for s,target in arm.writes))
+        self.assertIn('reverse movement confirmed',out.getvalue())
+        self.assertNotIn('Motion paused',out.getvalue())
 
 
 if __name__ == '__main__':

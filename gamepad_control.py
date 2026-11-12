@@ -10,8 +10,10 @@ Default: USB + OV5647 side preview on port 8080, 3-degree steps.
 SELECT stops the program. --steps can enable START step cycling.
 
 Unlike the vendor example this starts from the angles it reads, ignores input
-until the sticks are centered and buttons released, and pauses (the program
-keeps running) if a joint does not follow its command. Button numbers are Linux joystick numbers: check them
+until the sticks are centered and buttons released. A failed movement blocks
+only that joint/direction; reverse input and other joints remain available.
+Unreadable feedback or wrong-way movement pauses all motion.
+Button numbers are Linux joystick numbers: check them
 with joystick_control.py (input-only mode) first.
 """
 
@@ -131,6 +133,8 @@ def run(fd, pad, arm, limits, stream):
                 servo, angle), flush=True)
     print('Center the sticks and release all keys first.', flush=True)
     pending, stalls = {}, {servo: 0 for servo in RANGES}
+    blocked = {servo: set() for servo in RANGES}
+    last_limits = set()
     last_write = wait = 0.0
     shown_step = None
     faulted = False
@@ -149,7 +153,9 @@ def run(fd, pad, arm, limits, stream):
                 raise RuntimeError(stream.error + '; stopping')
             stream.set_status(['gamepad  step {} deg  {}'.format(
                 pad.step, 'PAUSED' if faulted else 'MOVE' if pad.request() else 'idle'),
-                'angles ' + ' '.join(str(angles[n]) for n in range(1, 7))])
+                'angles ' + ' '.join(str(angles[n]) for n in range(1, 7)),
+                'blocked ' + ' '.join('S{}{}'.format(s, '+' if d > 0 else '-')
+                    for s in sorted(blocked) for d in sorted(blocked[s]))])
         if pad.ready:
             faulted = False
         try:
@@ -157,11 +163,20 @@ def run(fd, pad, arm, limits, stream):
                 angles = read_angles(arm, recover=True)
                 for servo, (old, target) in pending.items():
                     actual = angles[servo]
-                    if abs(actual - target) > 2 or (actual - old) * (target - old) < 0:
-                        raise RuntimeError('Servo {} did not follow the command'.format(servo))
+                    direction = 1 if target > old else -1
+                    if (actual - old) * direction < 0:
+                        raise RuntimeError('Servo {} moved opposite to command'.format(servo))
                     stalls[servo] = stalls[servo] + 1 if actual == old else 0
-                    if stalls[servo] >= 3:
-                        raise RuntimeError('Servo {}: three commands without movement'.format(servo))
+                    if abs(actual - target) > 2 or stalls[servo] >= 3:
+                        blocked[servo].add(direction)
+                        print('S{} {} blocked: movement not confirmed; reverse allowed'.format(
+                            servo, '+' if direction > 0 else '-'), flush=True)
+                        stalls[servo] = 0
+                    elif (actual - old) * direction > 0:
+                        if -direction in blocked[servo]:
+                            blocked[servo].discard(-direction)
+                            print('S{} reverse movement confirmed; direction cleared'.format(
+                                servo), flush=True)
                 pending = {}
             if pending or not pad.request():
                 continue
@@ -170,7 +185,14 @@ def run(fd, pad, arm, limits, stream):
             if pad.stopped:
                 print('Stop button: no further commands')
                 return
-            targets = plan(angles, pad.request(), pad.step, limits)
+            request = pad.request()
+            allowed = {s: d for s, d in request.items() if d not in blocked[s]}
+            targets = plan(angles, allowed, pad.step, limits)
+            at_limits = {(s, d) for s, d in allowed.items() if s not in targets}
+            for servo, direction in sorted(at_limits - last_limits):
+                print('S{} {} limit: reverse allowed'.format(
+                    servo, '+' if direction > 0 else '-'), flush=True)
+            last_limits = at_limits
             durations = []
             for servo, target in targets.items():
                 move_ms = max(MOVE_MS, 100 * abs(target - angles[servo]))
