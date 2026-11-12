@@ -30,6 +30,7 @@ from camera_stream import camera_arg
 from joystick_control import AXIS, BUTTON, EVENT, INIT, MOVE_MS
 
 DEADZONE = 10000
+EDGE = 3
 RANGES = {1: (0, 180), 2: (0, 180), 3: (0, 180), 4: (0, 180), 5: (0, 270), 6: (0, 180)}
 # servo -> (buttons that raise the angle, buttons that lower it)
 BUTTON_MAP = {6: ((0,), (2,)), 5: ((1,), (3,)), 3: ((6,), (4,)), 4: ((7,), (5,))}
@@ -96,7 +97,8 @@ def plan(angles, request, step, limits):
         angle = angles[servo]
         low, high = limits[servo]
         target = min(max(angle + direction * step, min(low, angle)), max(high, angle))
-        if target != angle:
+        sdk_low, sdk_high = RANGES[servo]
+        if target != angle and sdk_low <= target <= sdk_high:
             targets[servo] = target
     return targets
 
@@ -120,8 +122,13 @@ def drain(fd, pad):
 
 
 def run(fd, pad, arm, limits, stream):
-    angles = read_angles(arm)
+    angles = read_angles(arm, recover=True)
     print('Angles: {}'.format(angles), flush=True)
+    for servo, angle in angles.items():
+        low, high = RANGES[servo]
+        if not low <= angle <= high:
+            print('Servo {} near SDK boundary ({}): inward input only'.format(
+                servo, angle), flush=True)
     print('Center the sticks and release all keys first.', flush=True)
     pending, stalls = {}, {servo: 0 for servo in RANGES}
     last_write = wait = 0.0
@@ -147,7 +154,7 @@ def run(fd, pad, arm, limits, stream):
             faulted = False
         try:
             if pending and time.monotonic() - last_write >= wait:
-                angles = read_angles(arm)
+                angles = read_angles(arm, recover=True)
                 for servo, (old, target) in pending.items():
                     actual = angles[servo]
                     if abs(actual - target) > 2 or (actual - old) * (target - old) < 0:
@@ -158,7 +165,7 @@ def run(fd, pad, arm, limits, stream):
                 pending = {}
             if pending or not pad.request():
                 continue
-            angles = read_angles(arm)
+            angles = read_angles(arm, recover=True)
             drain(fd, pad)  # Reading takes time: honor a release or stop that arrived.
             if pad.stopped:
                 print('Stop button: no further commands')
@@ -190,7 +197,7 @@ def run(fd, pad, arm, limits, stream):
 
 
 def parse_limits(values):
-    limits = dict(RANGES)
+    limits = {s: (low + EDGE, high - EDGE) for s, (low, high) in RANGES.items()}
     for text in values:
         try:
             servo, low, high = (int(part) for part in text.split(':'))

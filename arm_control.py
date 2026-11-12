@@ -65,14 +65,48 @@ def read_angle_retry(arm, servo, attempts=3):
     return value
 
 
-def read_angles(arm):
+NO_ANSWER = -73  # read_any result when the board answers raw 0 (servo gave no answer)
+
+
+def outside_angle(arm, servo, attempts=3):
+    """Angle of a servo the SDK calls unavailable because it sits outside its range.
+
+    Arm_serial_servo_read returns None both for "no answer" and for "outside
+    0..180". read_any keeps the raw value, so a steady reading that is not the
+    no-answer value is an SDK estimate, not a calibrated physical position.
+    Returns None when it is not trustworthy.
+    """
+    values = []
+    for _ in range(attempts):
+        try:
+            value = arm.Arm_serial_servo_read_any(servo)
+        except Exception:
+            return None
+        if (isinstance(value, bool) or not isinstance(value, (int, float))
+                or not math.isfinite(value) or value <= NO_ANSWER):
+            return None
+        values.append(value)
+        time.sleep(0.01)
+    if max(values) - min(values) > 2:
+        return None
+    mean = sum(values) / len(values)
+    if servo == 5:  # read_any always scales as 900..3100 -> 0..180: undo it.
+        return 270.0 * (900 + mean * 2200 / 180.0 - 380) / 3320.0
+    return 180 - mean if servo in (2, 3, 4) else mean
+
+
+def read_angles(arm, recover=False):
     angles = {}
     for servo in range(1, 7):
         value = read_angle_retry(arm, servo)
         limit = 270 if servo == 5 else 180
         if (isinstance(value, bool) or not isinstance(value, (int, float))
                 or not math.isfinite(value) or not 0 <= value <= limit):
-            raise RuntimeError("Servo {} angle unavailable; no further motion".format(servo))
+            value = outside_angle(arm, servo) if recover else None
+            # Only recover near a calibrated SDK boundary. A distant value
+            # must never become a large jump or an out-of-range SDK command.
+            if value is None or not -3 <= value <= limit + 3:
+                raise RuntimeError("Servo {} angle unavailable; no further motion".format(servo))
         angles[servo] = round(value)
     return angles
 
