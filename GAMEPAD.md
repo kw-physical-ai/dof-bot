@@ -91,3 +91,6 @@ python3 gamepad_control.py --move --stream 8080 --limit 2:40:180
 - 이동을 즉시 멈추는 API는 확인하지 못했다. 위험하면 전원을 끈다.
 - 컨트롤러 버튼 번호는 기종에 따라 다르다. 먼저 `python3 joystick_control.py --seconds 40`으로 번호를 확인한다.
 - 영상 서버는 기본으로 같은 네트워크의 누구나 볼 수 있다(읽기 전용).
+
+USB와 CAM0 OV5647 측면 영상을 한 화면에 보려면 `--side-csi`를 추가한다.
+[두 카메라 설정·실행 안내](CAMERA.md#pi-5-usb--cam0-ov5647-측면-화면)를 따른다.

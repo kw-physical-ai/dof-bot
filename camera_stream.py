@@ -44,6 +44,52 @@ def device_name(device):
 NOT_A_USB_CAMERA = ('rp1-cfe', 'pispbe', 'rpi-hevc', 'bcm2835-codec', 'bcm2835-isp')
 
 
+class CSICapture:
+    """Picamera2 adapter. CAM0 is a connector, not a libcamera index."""
+
+    def __init__(self, width, height, fps):
+        try:
+            from picamera2 import Picamera2
+        except ImportError as exc:
+            raise RuntimeError('CSI side view requires system Picamera2 on the Pi') from exc
+        cameras = Picamera2.global_camera_info()
+        matches = [i for i, c in enumerate(cameras)
+                   if c.get('Model', '').lower() == 'ov5647']
+        if len(matches) != 1:
+            raise RuntimeError('Expected one OV5647; run rpicam-hello --list-cameras. '
+                               'Configure dtoverlay=ov5647,cam0 for CAM0.')
+        self.camera = Picamera2(matches[0])
+        try:
+            # RGB888 arrays use BGR byte order, matching OpenCV/JPEG encoding.
+            config = self.camera.create_video_configuration(
+                main={'size': (width, height), 'format': 'RGB888'},
+                controls={'FrameRate': fps}, buffer_count=4)
+            self.camera.configure(config)
+            self.camera.start()
+        except BaseException:
+            self.camera.close()
+            raise
+
+    def read(self):
+        job = self.camera.capture_array('main', wait=False)
+        frame = job.get_result(timeout=3)
+        return frame is not None, frame
+
+    def release(self):
+        try:
+            self.camera.stop()
+        finally:
+            self.camera.close()
+
+
+DUAL_PAGE = (b'<!doctype html><meta charset="utf-8"><title>Dofbot cameras</title>'
+             b'<style>body{margin:0;background:#111;color:white;font:18px sans-serif}'
+             b'main{display:flex;flex-wrap:wrap}section{flex:1 1 480px}img{width:100%}'
+             b'h2{margin:8px}</style><main><section><h2>USB / front</h2>'
+             b'<img src="/stream"></section><section><h2>OV5647 / side</h2>'
+             b'<img src="/side/stream"></section></main>')
+
+
 PAGE = (b'<!doctype html><meta charset="utf-8"><title>Dofbot camera</title>'
         b'<body style="margin:0;background:#111">'
         b'<img src="/stream" style="width:100%;max-width:960px">')
@@ -51,23 +97,28 @@ PAGE = (b'<!doctype html><meta charset="utf-8"><title>Dofbot camera</title>'
 
 class CameraStream:
     def __init__(self, port, bind='0.0.0.0', device=0,
-                 width=640, height=480, fps=15, quality=80):
+                 width=640, height=480, fps=15, quality=80, side_csi=False,
+                 _csi=False, _serve=True):
         import cv2  # Imported late so tools without a camera need no OpenCV.
         self.cv2 = cv2
         self.fps, self.quality = fps, quality
         path = device_path(device)
         name = device_name(device)
-        if name and name.startswith(NOT_A_USB_CAMERA):
+        if not _csi and name and name.startswith(NOT_A_USB_CAMERA):
             raise RuntimeError(
                 '{} is "{}", a Pi camera-pipeline node, not the USB camera. '
                 'List cameras: v4l2-ctl --list-devices'.format(path, name))
         backend = getattr(cv2, 'CAP_V4L2', cv2.CAP_ANY)
-        self.cap = cv2.VideoCapture(device, backend)
+        self.side = None
+        self.last_frame_at = time.monotonic()
+        self.cap = (CSICapture(width, height, fps) if _csi
+                    else cv2.VideoCapture(device, backend))
         try:
-            self.cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
-            self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
-            self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
-            self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)  # Small queue: less lag.
+            if not _csi:
+                self.cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
+                self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
+                self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
+                self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)  # Small queue: less lag.
             ok, frame = self.cap.read()
             if not ok:
                 raise RuntimeError(
@@ -79,30 +130,54 @@ class CameraStream:
             self.jpeg = None
             self.version = 0
             self.measured_fps = 0.0
-            self.error = None
+            self._error = None
             self.cond = threading.Condition()
             self.stop_event = threading.Event()
-            self.server = self._make_server(bind, port)
+            if side_csi:
+                self.side = CameraStream(0, width=width, height=height, fps=fps,
+                                         quality=quality, _csi=True, _serve=False)
+            self.server = self._make_server(bind, port) if _serve else None
         except BaseException:
+            if self.side:
+                self.side.close()
             self.cap.release()
             raise
-        self.threads = [threading.Thread(target=self._capture, daemon=True),
-                        threading.Thread(target=self.server.serve_forever, daemon=True)]
+        self.last_frame_at = time.monotonic()
+        self.threads = [threading.Thread(target=self._capture, daemon=True)]
+        if self.server:
+            self.threads.append(threading.Thread(target=self.server.serve_forever, daemon=True))
         for thread in self.threads:
             thread.start()
 
+    @property
+    def error(self):
+        if self._error:
+            return self._error
+        if time.monotonic() - self.last_frame_at > 3:
+            return 'Camera frame timeout'
+        if self.side and self.side.error:
+            return 'Side camera: ' + self.side.error
+        return None
+
     def set_status(self, lines):
         self.lines = list(lines)
+        if self.side:
+            self.side.set_status(lines)
 
     def close(self):
         self.stop_event.set()
         with self.cond:
             self.cond.notify_all()
-        self.server.shutdown()
-        self.server.server_close()
+        if self.server:
+            self.server.shutdown()
+            self.server.server_close()
         for thread in self.threads:
             thread.join(timeout=2)
-        self.cap.release()
+        try:
+            self.cap.release()
+        finally:
+            if self.side:
+                self.side.close()
 
     def _draw(self, frame):
         cv2 = self.cv2
@@ -121,16 +196,21 @@ class CameraStream:
         previous = last_sent = time.monotonic()
         failures = 0
         while not self.stop_event.is_set():
-            ok, frame = self.cap.read()
+            try:
+                ok, frame = self.cap.read()
+            except Exception as exc:
+                self._error = 'Camera capture failed: {}'.format(exc)
+                break
             now = time.monotonic()
             if not ok:
                 failures += 1
                 if failures >= 30:
-                    self.error = 'Camera stopped delivering frames'
+                    self._error = 'Camera stopped delivering frames'
                     break
                 time.sleep(0.05)
                 continue
             failures = 0
+            self.last_frame_at = now
             elapsed, previous = now - previous, now
             if elapsed > 0:
                 rate = 1.0 / elapsed
@@ -168,17 +248,19 @@ class CameraStream:
             def do_GET(self):
                 try:
                     if self.path == '/':
-                        self.reply(PAGE, 'text/html')
-                    elif self.path == '/snapshot.jpg' and stream.jpeg:
+                        self.reply(DUAL_PAGE if stream.side else PAGE, 'text/html')
+                    elif self.path == '/snapshot.jpg' and stream.jpeg and not stream.error:
                         self.reply(stream.jpeg, 'image/jpeg')
                     elif self.path == '/stream':
-                        self.serve_stream()
+                        self.serve_stream(stream)
+                    elif self.path == '/side/stream' and stream.side:
+                        self.serve_stream(stream.side)
                     else:
                         self.send_error(404)
                 except (BrokenPipeError, ConnectionResetError):
                     pass
 
-            def serve_stream(self):
+            def serve_stream(self, stream):
                 self.send_response(200)
                 self.send_header('Content-Type',
                                  'multipart/x-mixed-replace; boundary=frame')
@@ -210,11 +292,13 @@ def main():
     parser.add_argument('--bind', default='0.0.0.0')
     parser.add_argument('--camera', type=camera_arg, default=0,
                         help='index (0 = /dev/video0) or device path')
+    parser.add_argument('--side-csi', action='store_true',
+                        help='show the OV5647 side view next to USB')
     args = parser.parse_args()
     if not 1 <= args.port <= 65535:
         parser.error('invalid port')
     try:
-        stream = CameraStream(args.port, args.bind, args.camera)
+        stream = CameraStream(args.port, args.bind, args.camera, side_csi=args.side_csi)
     except (OSError, RuntimeError) as exc:
         print(exc)
         return 1

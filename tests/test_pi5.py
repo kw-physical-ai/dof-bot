@@ -49,6 +49,17 @@ class OpenArmTest(unittest.TestCase):
             arm = arm_control.open_arm()
         self.assertEqual(arm.bus.bus, 1)
 
+    def test_sdk_default_seven_is_overridden_by_selected_bus(self):
+        modules = fake_arm_lib()
+        class NewSDK:
+            def __init__(self, i2c_bus=7):
+                self.bus_number = i2c_bus
+        modules['Arm_Lib'].Arm_Device = NewSDK
+        with patch.dict(sys.modules, modules), \
+                patch.object(arm_control, 'check_i2c_device'):
+            arm = arm_control.open_arm()
+        self.assertEqual(arm.bus_number, arm_control.I2C_BUS)
+
     def test_override_bus_redirects_only_during_creation(self):
         modules = fake_arm_lib()
         with patch.dict(sys.modules, modules), \

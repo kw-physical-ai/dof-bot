@@ -2,6 +2,7 @@
 
 import fcntl
 import importlib
+import inspect
 import math
 import os
 import subprocess
@@ -28,13 +29,13 @@ def check_i2c_device():
 def open_arm():
     """Create Arm_Lib.Arm_Device on I2C_BUS.
 
-    Arm_Lib hard-codes SMBus(1). For another bus the SMBus constructor is
-    redirected only while the device object is created.
+    Pass the bus explicitly in current SDKs; older SDKs need a temporary
+    SMBus redirect while the device object is created.
     """
     check_i2c_device()
     from Arm_Lib import Arm_Device
-    if I2C_BUS == 1:
-        return Arm_Device()
+    if 'i2c_bus' in inspect.signature(Arm_Device).parameters:
+        return Arm_Device(i2c_bus=I2C_BUS)
     patched = []
     for name in ('smbus', 'smbus2'):
         try:

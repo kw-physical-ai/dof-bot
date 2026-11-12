@@ -99,3 +99,6 @@ Pi에서는 추적 중인 파일을 직접 수정하지 않는 것을 기본으�
 조립·OS 설치·조작 안내 PDF는 로컬 `pdf/`에 별도로 보관하며 공개 저장소에는 포함하지 않습니다. 조작 자료에 나온 Jupyter 노트북 `Dofbot/1.telecontrol/4.arm_handle`도 이 저장소에 포함되어 있지 않습니다.
 
 모터 제어 API는 [Yahboom의 단일 서보 제어 안내](https://github.com/YahboomTechnology/dofbot-Pi/blob/main/10.Basic%20control%20course/3.Control%20single%20servo.pdf)와 [각도 읽기 안내](https://github.com/YahboomTechnology/dofbot-Pi/blob/main/10.Basic%20control%20course/4.Read%20servo%20angle.pdf)를 기준으로 작성했습니다. 설치 이미지의 `Arm_Lib` 동작은 실제 장비에서 확인해야 합니다.
+
+USB와 CAM0 OV5647 측면 영상을 한 화면에 보려면 `--side-csi`를 추가한다.
+[두 카메라 설정·실행 안내](CAMERA.md#pi-5-usb--cam0-ov5647-측면-화면)를 따른다.

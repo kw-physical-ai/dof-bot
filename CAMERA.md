@@ -5,7 +5,7 @@
 > - 현재 팀 설정은 **USB 카메라, `--camera 0`**이다. USB 카메라는 Pi 5에서도 OpenCV로 그대로 연다.
 > - Pi 5는 카메라와 무관한 영상 노드(`pispbe`, `rpi-hevc`, CSI를 연결하면 `rp1-cfe`)를 많이 만든다. `python3 preflight.py`의 카메라 목록이나 `v4l2-ctl --list-devices`로 USB 카메라가 `/dev/video0`인지 확인한다.
 > - 번호가 자꾸 바뀌면 `ls /dev/v4l/by-id/`에서 `...-video-index0`로 끝나는 경로를 `--camera`에 그대로 넣는다.
-> - CSI V1.3을 Pi 5에 붙이려면 22핀↔15핀 변환 케이블이 필요하다. 확인은 `rpicam-hello --list-cameras`로 하고, 영상은 `picamera2`로 읽어야 한다. `camera_stream.py`는 CSI 노드를 직접 열지 않으며, 그런 노드를 고르면 열기 전에 거부한다. CSI 지원은 아직 코드에 없다.
+> - CSI V1.3을 Pi 5에 붙이려면 22핀↔15핀 변환 케이블이 필요하다. 확인은 `rpicam-hello --list-cameras`로 하고, 영상은 `picamera2`로 읽어야 한다. `camera_stream.py`는 CSI 노드를 직접 열지 않으며, 그런 노드를 고르면 열기 전에 거부한다. `--side-csi`를 사용하면 Picamera2로 OV5647을 별도 캡처해 USB와 같은 페이지에 표시한다.
 
 Raspberry Pi 4에 기존 USB 카메라와 15핀 Camera Module V1.3을 연결하는 절차다. 2026-11-07 제조사 Ubuntu 20.04.3 이미지, 커널 `5.4.0-1050-raspi`, Python 3.8.10 환경에서 확인했다. V1.3은 통상 OV5647 센서를 쓰는 모델이다. 최신 Raspberry Pi OS나 다른 카메라 모델에는 아래 구형 카메라 설정을 그대로 적용하지 않는다.
 
@@ -172,3 +172,60 @@ python3 gamepad_control.py --move --steps 3 --camera 2 --stream 8081 --bind 127.
 | 포트 사용 중 | 기존 스트림을 확인해 정상 종료하거나 다른 포트 사용. 같은 카메라에 두 스트림을 실행하지 않음 |
 
 본 수집 전에 카메라 위치·고정 방법·시야를 정하고 [수집 가이드](DATA_COLLECTION.md#43-카메라-장착-확인-본-수집-전)의 검사를 마친다. 카메라 구성이나 장착이 바뀌면 `camera_setup`을 새로 기록한다. 장비 주소, 비밀번호, 사진, 영상, 개인 로그는 공개 저장소에 올리지 않는다.
+
+## Pi 5: USB + CAM0 OV5647 측면 화면
+
+USB는 기존 시점, OV5647은 측면에 고정한다. CAM0는 보드의 커넥터 이름이며
+`--camera 0`(USB 영상 장치 번호)과 다르다. 코드는 감지된 OV5647이 정확히 하나일 때
+그 카메라의 libcamera 번호를 선택한다. CAM0 배선은 작업자가 확인한다.
+
+기존 제조사 앱과 같은 카메라를 쓰는 프로그램을 종료한 뒤 확인한다.
+호스트 Debian의 Picamera2와 OpenCV가 보이는 Python을 사용한다. 기존 제조사 Docker는
+CSI 장치 전달을 검증하지 않았으므로 아래 명령의 실행 환경으로 가정하지 않는다.
+필요한 모듈 확인: `python3 -c "import picamera2, cv2"`.
+일반 Raspberry Pi OS에서는 `python3-picamera2` 패키지를 사용하며, 이 장비는
+`/etc/apt` 설정이 없는 상태를 관찰했으므로 설치 명령을 무조건 실행하지 않는다.
+
+1. 전원을 끈 상태에서 22핀↔15핀 카메라 케이블로 CAM0에 연결한다.
+2. `/boot/firmware/config.txt`를 백업하고 OV5647 수동 설정을 사용한다.
+   `camera_auto_detect=0`, `dtoverlay=ov5647,cam0`를 두고 같은 포트의 다른 센서
+   overlay는 제거한다. 이미 설정됐다면 중복 추가하지 않는다.
+3. 팔을 안정된 상태로 두고 정상 재부팅한다. `rpicam-hello --list-cameras`에서
+   OV5647이 나오는지 확인한다. 감지되지 않으면 먼저 배선·부팅 로그를 확인한다.
+4. 모터 없이 두 영상을 확인한다.
+
+```bash
+python3 camera_stream.py --camera 0 --side-csi --port 8080
+```
+
+브라우저에서 `http://<Pi주소>:8080/`을 열면 USB와 측면 영상이 함께 보인다.
+`/stream`은 USB, `/side/stream`은 OV5647이다. USB 번호가 바뀌면
+`--camera /dev/v4l/by-id/...-video-index0`를 사용한다.
+
+모터 제어권과 실제 설치 SDK의 I2C 버스를 확인하고, [게임패드 시작 절차](GAMEPAD.md#시작-전-절차)와
+[조이스틱 안내](JOYSTICK.md)의 입력 매핑 검사를 마친 다음 실행한다. 아래 두 명령은 대안이며 동시에 실행하지 않는다.
+
+```bash
+python3 gamepad_control.py --move --stream 8080 --camera 0 --side-csi
+python3 joystick_control.py --move --stream 8080 --camera 0 --side-csi
+```
+
+조이스틱은 Pi에 연결해야 한다. 브라우저는 영상만 표시한다. 기본 바인딩은
+`0.0.0.0`이며 인증이 없으므로 신뢰할 수 있는 네트워크에서 사용한다.
+로컬 화면만 필요하면 `--bind 127.0.0.1`을 추가한다.
+종료는 Ctrl+C 또는 기존 정지 버튼을 사용한다. 한 카메라의 캡처 오류 또는
+3초 초과 프레임 정체가 감지되면 추가 모터 명령을 차단하고 종료한다.
+이미 전송한 이동의 즉시 정지를 보장하지 않는다.
+
+이 기능은 조작용 미리보기다. 두 스트림은 독립적이며 촬영 동기화를 보장하지 않는다.
+학습용 원본 프레임·관절각·명령·타임스탬프 저장은 아직 구현하지 않았다.
+화면의 문구가 있는 JPEG를 학습 데이터로 사용하지 않는다.
+Mac 가짜 카메라 테스트와 Pi 실물 검증을 구분한다. 실물에서는 두 영상의 색상,
+방향, 지연, 지속 캡처와 한 카메라 실패 시 추가 명령 차단을 별도로 확인해야 한다.
+
+Picamera2 API와 RGB888의 OpenCV 바이트 순서는
+[공식 매뉴얼](https://datasheets.raspberrypi.com/camera/picamera2-manual.pdf)을 따른다.
+
+이번 변경은 가짜 장치 테스트 41개로 확인했다. 실제 Pi의 동시 영상·조작은 미검증이다.
+SDK가 `i2c_bus` 인자를 지원하면 선택 버스를 명시적으로 전달하며, 구형 SDK는
+생성 시에만 SMBus를 우회한다. 기본 버스가 7인 SDK를 설치해도 기본 설정은 버스 1을 사용한다.

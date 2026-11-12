@@ -86,3 +86,6 @@ python3 -m unittest discover -s tests -v
 ```
 
 2026-11-09 Pi 5 이전 후 Python 3.11 가상환경에서 `tests/test_pi5.py`를 포함한 35개가 통과했다. 이것도 가짜 하드웨어 검사다. 구현 시 Pi가 오프라인이어서 실제 버튼 매핑·USB 입력·SDK 통신·로봇 이동은 미검증이다. 연결 복구 후 이 문서의 입력 확인부터 진행해야 한다. Linux 이벤트 형식은 [커널 joystick API](https://kernel.org/doc/html/latest/input/joydev/joystick-api.html)를 따른다.
+
+USB와 CAM0 OV5647 측면 영상을 한 화면에 보려면 `--side-csi`를 추가한다.
+[두 카메라 설정·실행 안내](CAMERA.md#pi-5-usb--cam0-ov5647-측면-화면)를 따른다.

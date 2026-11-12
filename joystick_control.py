@@ -209,7 +209,11 @@ def main():
     parser.add_argument('--camera', type=camera_arg, default=0,
                         help='camera index (0 = /dev/video0) or a device path such as '
                              '/dev/v4l/by-id/...-video-index0')
+    parser.add_argument('--side-csi', action='store_true',
+                        help='show OV5647 side camera next to USB; requires --stream')
     args = parser.parse_args()
+    if args.side_csi and not args.stream:
+        parser.error('--side-csi requires --stream PORT')
     try:
         steps = tuple(int(part) for part in args.steps.split(','))
     except ValueError:
@@ -247,7 +251,8 @@ def main():
                 try:
                     if args.stream:
                         from camera_stream import CameraStream
-                        stream = CameraStream(args.stream, args.bind, args.camera)
+                        stream = CameraStream(args.stream, args.bind, args.camera,
+                                              side_csi=args.side_csi)
                         print('Camera view: http://<pi-address>:{}/'.format(args.stream),
                               flush=True)
                     jogger = Jogger(open_arm())
