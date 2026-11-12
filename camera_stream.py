@@ -40,6 +40,48 @@ def make_page(count):
             '</div>').encode()
 
 
+def csi_number(device):
+    """'csi0' -> 0 (a ribbon-cable camera on Pi 5 via Picamera2); anything else -> None."""
+    match = re.fullmatch(r'csi(\d+)', device) if isinstance(device, str) else None
+    return int(match.group(1)) if match else None
+
+
+class PiCamCapture:
+    """Gives a Picamera2 camera the small part of cv2.VideoCapture this file uses.
+
+    Pi 5 ribbon-cable (CSI) cameras use libcamera and do not open as /dev/videoN
+    through OpenCV, so they are read with Picamera2 instead.
+    """
+
+    def __init__(self, number, width, height):
+        from picamera2 import Picamera2  # Only on a Pi with Picamera2 installed.
+        self.camera = Picamera2(number)
+        try:
+            # "RGB888" is laid out as B,G,R in memory, which is what OpenCV expects.
+            config = self.camera.create_video_configuration(
+                main={'size': (width, height), 'format': 'RGB888'})
+            self.camera.configure(config)
+            self.camera.start()
+        except BaseException:
+            self.camera.close()
+            raise
+
+    def set(self, *args):
+        return True
+
+    def read(self):
+        try:
+            return True, self.camera.capture_array()
+        except Exception:
+            return False, None
+
+    def release(self):
+        try:
+            self.camera.stop()
+        finally:
+            self.camera.close()
+
+
 class Source:
     """One camera: its device, capture thread and latest JPEG."""
 
@@ -50,13 +92,18 @@ class Source:
         self.version = 0
         self.measured_fps = 0.0
         self.error = None
-        backend = getattr(cv2, 'CAP_V4L2', cv2.CAP_ANY)
-        self.cap = cv2.VideoCapture(device, backend)
+        number = csi_number(device)
+        if number is not None:
+            self.cap = PiCamCapture(number, width, height)
+        else:
+            backend = getattr(cv2, 'CAP_V4L2', cv2.CAP_ANY)
+            self.cap = cv2.VideoCapture(device, backend)
         try:
-            self.cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
-            self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
-            self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
-            self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)  # Small queue: less lag.
+            if number is None:
+                self.cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
+                self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
+                self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
+                self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)  # Small queue: less lag.
             ok, frame = self.cap.read()
             if not ok:
                 raise RuntimeError(
@@ -247,7 +294,9 @@ def main():
     parser.add_argument('--bind', default='0.0.0.0')
     parser.add_argument('--camera', default='0',
                         help='camera numbers or device paths, comma separated, e.g. 0,1 '
-                             'or /dev/v4l/by-id/...-video-index0')
+                             'or /dev/v4l/by-id/...-video-index0. On Pi 5 a ribbon-cable '
+                             'camera is csi0 (CAM 0) or csi1 (CAM 1), e.g. '
+                             '/dev/v4l/by-id/...-video-index0,csi0')
     args = parser.parse_args()
     if not 1 <= args.port <= 65535:
         parser.error('invalid port')

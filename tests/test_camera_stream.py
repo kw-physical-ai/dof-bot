@@ -66,6 +66,12 @@ class ParseTests(unittest.TestCase):
         self.assertEqual(parse_cameras('/dev/v4l/by-id/x-index0,0'),
                          ['/dev/v4l/by-id/x-index0', 0])
 
+    def test_csi_names_are_kept_as_text(self):
+        self.assertEqual(parse_cameras('0,csi0'), [0, 'csi0'])
+        self.assertEqual(camera_stream.csi_number('csi1'), 1)
+        self.assertIsNone(camera_stream.csi_number('/dev/video0'))
+        self.assertIsNone(camera_stream.csi_number(0))
+
     def test_rejects_empty_and_duplicate(self):
         for text in ('', '0,', '0,0'):
             with self.assertRaises(ValueError):
@@ -115,6 +121,51 @@ class StreamTests(unittest.TestCase):
         finally:
             stream.close()
         self.assertTrue(all(cap.released for cap in FakeCap.opened))
+
+    def test_csi_camera_uses_picamera2_not_opencv(self):
+        opened = []
+
+        class FakePicamera2:
+            def __init__(self, number):
+                opened.append(self)
+                self.number, self.started, self.closed = number, False, False
+
+            def create_video_configuration(self, **kwargs):
+                return kwargs
+
+            def configure(self, config):
+                self.config = config
+
+            def start(self):
+                self.started = True
+
+            def capture_array(self):
+                time.sleep(0.005)
+                return FakeFrame()
+
+            def stop(self):
+                self.started = False
+
+            def close(self):
+                self.closed = True
+
+        saved = sys.modules.get('picamera2')
+        sys.modules['picamera2'] = types.SimpleNamespace(Picamera2=FakePicamera2)
+        try:
+            stream = CameraStream(0, '127.0.0.1', [0, 'csi0'])
+            try:
+                self.wait_frames(stream)
+                self.assertEqual(len(FakeCap.opened), 1)  # csi0 never went to OpenCV
+                self.assertEqual(opened[0].number, 0)
+                self.assertTrue(opened[0].started)
+            finally:
+                stream.close()
+            self.assertTrue(opened[0].closed)
+        finally:
+            if saved is None:
+                sys.modules.pop('picamera2', None)
+            else:
+                sys.modules['picamera2'] = saved
 
     def test_stream_endpoint_sends_multipart(self):
         stream = CameraStream(0, '127.0.0.1', [0, 1])

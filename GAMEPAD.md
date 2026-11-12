@@ -69,7 +69,17 @@ python3 gamepad_control.py --move --stream 8080 --camera 0,1 --limit 2:40:180
 | `/stream/N`, `/snapshot/N.jpg` | N번 카메라의 영상, 최근 한 장 |
 | `/stream`, `/snapshot.jpg` | 0번 카메라 (기존 주소 유지) |
 
-모든 화면에 같은 조이스틱 상태가 덧그려진다. 한 대라도 시작할 때 프레임이 없으면 시작하지 않고, 실행 중 한 대라도 멈추면 종료한다. 조이스틱은 계속 Pi에 꽂힌 장치를 읽고, 브라우저로는 입력을 보낼 수 없다. 15핀(CSI) 카메라는 `/boot/firmware/usercfg.txt`에 `start_x=1`, `gpu_mem=128`을 넣고 재부팅해야 `/dev/video0`으로 잡히며, 이 PC에서는 가짜 카메라로만 시험했다.
+모든 화면에 같은 조이스틱 상태가 덧그려진다. 한 대라도 시작할 때 프레임이 없으면 시작하지 않고, 실행 중 한 대라도 멈추면 종료한다. 조이스틱은 계속 Pi에 꽂힌 장치를 읽고, 브라우저로는 입력을 보낼 수 없다. 구형 Dofbot 이미지에서 15핀(CSI) 카메라는 `/boot/firmware/usercfg.txt`에 `start_x=1`, `gpu_mem=128`을 넣고 재부팅해야 `/dev/videoN`으로 잡혔다.
+
+**Pi 5**: 22핀↔15핀 케이블로 CAM 0(또는 CAM 1)에 꽂은 카메라는 libcamera를 쓰므로 `/dev/videoN`으로 열리지 않는다. 위 설정은 필요 없고, `--camera`에 `csi0`(CAM 0), `csi1`(CAM 1)을 주면 Picamera2(`sudo apt install -y python3-picamera2`)로 읽는다. USB 카메라와 섞어 쓸 수 있다.
+
+```bash
+rpicam-hello --list-cameras     # CSI 카메라가 보이는지 먼저 확인
+python3 gamepad_control.py --move --stream 8080 \
+    --camera /dev/v4l/by-id/<USB카메라>-video-index0,csi0 --limit 2:40:180
+```
+
+`csi` 지원은 가짜 `picamera2`로만 시험했고 Pi 5 실물에서는 아직 확인하지 못했다.
 
 ### 안전 동작
 

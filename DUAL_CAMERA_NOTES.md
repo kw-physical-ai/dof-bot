@@ -25,6 +25,7 @@
 
 ## 장비에서 확인한 사실
 
+- **Pi 5에서는 이 항목이 적용되지 않는다.** CSI 카메라는 `--camera csi0`/`csi1`로 Picamera2를 통해 연다([GAMEPAD.md](GAMEPAD.md) 참고). 아래는 구형 Dofbot 이미지에서 확인한 내용이다.
 - **CSI 카메라는 설정 후에야 잡힌다.** `/boot/firmware/usercfg.txt`에 `start_x=1`, `gpu_mem=128`을 넣고 재부팅하면 `camera0`이라는 이름으로 `/dev/video2`가 생긴다. 그 전에는 `vcgencmd get_camera`가 `VCHI initialization failed`를 냈다.
 - **카메라 번호는 바뀐다.** USB 카메라는 재연결될 때마다 `/dev/video0`·`1`·`3`으로 옮겨 갔다. 번호 대신 `/dev/v4l/by-id/...-video-index0` 경로를 쓰면 같은 카메라를 찾는다.
 - **카메라는 프로그램 하나만 열 수 있다.** 제조사 앱이나 다른 사람이 돌린 `camera_stream.py`가 잡고 있으면 `Camera N (...) gave no frame`으로 시작하지 않는다. `sudo fuser -v /dev/video*`로 점유자를 본다. 접속해 있는 것만으로는 막히지 않는다.

@@ -271,7 +271,8 @@ def main():
     parser.add_argument('--stream', type=int, default=0, metavar='PORT')
     parser.add_argument('--bind', default='0.0.0.0')
     parser.add_argument('--camera', default='0',
-                        help='camera numbers or device paths, comma separated, e.g. 0,1')
+                        help='camera numbers or device paths, comma separated, e.g. 0,1; '
+                             'Pi 5 ribbon-cable cameras are csi0 / csi1')
     args = parser.parse_args()
     try:
         steps = tuple(int(p) for p in args.steps.split(','))
