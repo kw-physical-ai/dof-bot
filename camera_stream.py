@@ -85,8 +85,8 @@ class CSICapture:
 DUAL_PAGE = (b'<!doctype html><meta charset="utf-8"><title>Dofbot cameras</title>'
              b'<style>body{margin:0;background:#111;color:white;font:18px sans-serif}'
              b'main{display:flex;flex-wrap:wrap}section{flex:1 1 480px}img{width:100%}'
-             b'h2{margin:8px}</style><main><section><h2>USB / front</h2>'
-             b'<img src="/stream"></section><section><h2>OV5647 / side</h2>'
+             b'h2{margin:8px}</style><main><section><h2>USB / wrist</h2>'
+             b'<img src="/stream"></section><section><h2>OV5647 / external</h2>'
              b'<img src="/side/stream"></section></main>')
 
 
@@ -129,6 +129,9 @@ class CameraStream:
             self.lines = []
             self.jpeg = None
             self.version = 0
+            self.frame_id = 0
+            self.frame_sink = None
+            self.sink_lock = threading.Lock()
             self.measured_fps = 0.0
             self._error = None
             self.cond = threading.Condition()
@@ -158,6 +161,11 @@ class CameraStream:
         if self.side and self.side.error:
             return 'Side camera: ' + self.side.error
         return None
+
+    def set_frame_sink(self, sink):
+        """Deliver unannotated BGR frames from this capture owner only."""
+        with self.sink_lock:
+            self.frame_sink = sink
 
     def set_status(self, lines):
         self.lines = list(lines)
@@ -219,6 +227,10 @@ class CameraStream:
             if now - last_sent < 1.0 / self.fps:
                 continue
             last_sent = now
+            self.frame_id += 1
+            with self.sink_lock:
+                if self.frame_sink:
+                    self.frame_sink(self.frame_id, now, frame)
             self._draw(frame)
             ok, buffer = cv2.imencode(
                 '.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, self.quality])

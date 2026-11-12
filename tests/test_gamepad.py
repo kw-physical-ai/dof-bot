@@ -5,6 +5,7 @@ import struct
 import threading
 import time
 import unittest
+from unittest.mock import Mock
 
 from gamepad_control import (AXIS, BUTTON, INIT, RANGES, Pad, parse_limits, plan, run)
 
@@ -161,9 +162,10 @@ class GamepadTests(unittest.TestCase):
         arm, out = EndStopArm(), io.StringIO()
         thread=threading.Thread(target=feeder)
         thread.start()
+        recorder = Mock()
         try:
             with contextlib.redirect_stdout(out):
-                run(read_fd,Pad(),arm,parse_limits([]),None)
+                run(read_fd,Pad(),arm,parse_limits([]),None,recorder=recorder)
         finally:
             thread.join()
             os.close(read_fd)
@@ -173,6 +175,8 @@ class GamepadTests(unittest.TestCase):
         self.assertTrue(any(s==3 and target<90 for s,target in arm.writes))
         self.assertIn('reverse movement confirmed',out.getvalue())
         self.assertNotIn('Motion paused',out.getvalue())
+        self.assertEqual(recorder.action.call_count, len(arm.writes))
+        self.assertGreater(recorder.state.call_count, 1)
 
 
     def test_unknown_joint_at_start_does_not_disable_known_joint(self):

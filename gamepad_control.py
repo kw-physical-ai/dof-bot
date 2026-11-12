@@ -188,8 +188,15 @@ def align_start(fd, pad, arm, limits, stream):
     return not pad.stopped
 
 
-def run(fd, pad, arm, limits, stream):
-    angles = read_angles(arm, recover=True, partial=True)
+def run(fd, pad, arm, limits, stream, recorder=None):
+    def observe():
+        start = time.monotonic()
+        values = read_angles(arm, recover=True, partial=True)
+        if recorder:
+            recorder.state(values, start, time.monotonic())
+        return values
+
+    angles = observe()
     print('Angles: {}'.format(angles), flush=True)
     for servo, angle in angles.items():
         low, high = RANGES[servo]
@@ -209,6 +216,8 @@ def run(fd, pad, arm, limits, stream):
         select.select([fd], [], [], 0.02)
         drain(fd, pad)
         if pad.stopped:
+            if recorder:
+                recorder.event('stop_button')
             print('Stop button: no further commands')
             return
         if shown_step != pad.step:
@@ -220,6 +229,8 @@ def run(fd, pad, arm, limits, stream):
                 raise RuntimeError(stream.error + '; stopping')
             stream.set_status(['gamepad  step {} deg  {}'.format(
                 pad.step, 'PAUSED' if faulted else 'MOVE' if pad.request() else 'idle'),
+                ('REC ERROR: ' + recorder.error if recorder and recorder.error else
+                 'REC ' + recorder.path.name if recorder else 'preview only'),
                 'angles ' + ' '.join('?' if angles[n] is None else str(angles[n]) for n in range(1, 7)),
                 'blocked ' + ' '.join('S{}{}'.format(s, '+' if d > 0 else '-')
                     for s in sorted(blocked) for d in sorted(blocked[s]))])
@@ -227,7 +238,9 @@ def run(fd, pad, arm, limits, stream):
             faulted = False
         try:
             if pending and time.monotonic() - last_write >= wait:
-                angles = read_angles(arm, recover=True, partial=True)
+                angles = observe()
+                if recorder:
+                    recorder.event('command_feedback', pending={str(s): list(v) for s, v in pending.items()})
                 for servo, (old, target) in pending.items():
                     actual = angles[servo]
                     if actual is None:
@@ -252,7 +265,7 @@ def run(fd, pad, arm, limits, stream):
                 pending = {}
             if pending or not pad.request():
                 continue
-            angles = read_angles(arm, recover=True, partial=True)
+            angles = observe()
             drain(fd, pad)  # Reading takes time: honor a release or stop that arrived.
             if pad.stopped:
                 print('Stop button: no further commands')
@@ -269,7 +282,10 @@ def run(fd, pad, arm, limits, stream):
             durations = []
             for servo, target in targets.items():
                 move_ms = max(MOVE_MS, 100 * abs(target - angles[servo]))
+                sent_at = time.monotonic()
                 arm.Arm_serial_servo_write(servo, target, move_ms)
+                if recorder:
+                    recorder.action(servo, target, move_ms, angles, sent_at, time.monotonic())
                 durations.append(move_ms)
                 pending[servo] = (angles[servo], target)
             if targets:
@@ -280,6 +296,8 @@ def run(fd, pad, arm, limits, stream):
         except InputError:
             raise
         except RuntimeError as exc:
+            if recorder:
+                recorder.event('control_fault', message=str(exc))
             # A failed check pauses motion; the program and camera stay up.
             # Motion resumes only after every stick and key was released once.
             pending = {}
@@ -305,7 +323,7 @@ def parse_limits(values):
     return limits
 
 
-def main():
+def main(collect_task=None):
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--device', default='/dev/input/js0')
@@ -345,6 +363,8 @@ def main():
     print('Gamepad control: motors enabled after neutral input. SELECT / Ctrl+C stops.',
           flush=True)
     fd = None
+    recorder = None
+    recording_result = 'abort'
     try:
         fd = os.open(args.device, os.O_RDONLY | os.O_NONBLOCK)
         axes, buttons = array.array('B', [0]), array.array('B', [0])
@@ -365,10 +385,43 @@ def main():
                     print('Camera view: http://<pi-address>:{}/'.format(args.stream), flush=True)
                 arm = open_arm()
                 if align_start(fd, pad, arm, limits, stream):
-                    run(fd, pad, arm, limits, stream)
+                    if collect_task is not None:
+                        if stream is None:
+                            raise RuntimeError('Data collection requires camera streaming')
+                        from recorder import EpisodeRecorder
+                        cameras = ['wrist', 'external'] if stream.side else ['wrist']
+                        recorder = EpisodeRecorder(collect_task, cameras,
+                            dict(usb_camera=args.camera, side_csi=args.side_csi,
+                                 steps=list(steps), limits=limits, preview_size=list(stream.size)))
+                        stream.set_frame_sink(lambda fid, at, frame: recorder.frame('wrist', fid, at, frame))
+                        if stream.side:
+                            stream.side.set_frame_sink(lambda fid, at, frame: recorder.frame('external', fid, at, frame))
+                        print('Recording: {}'.format(recorder.path), flush=True)
+                        # Capture a real initial view from every camera before any manual command.
+                        until = time.monotonic() + 3
+                        while not all(recorder.counts['frames'].values()) and not recorder.error:
+                            select.select([fd], [], [], .02)
+                            drain(fd, pad)
+                            if pad.stopped:
+                                break
+                            if time.monotonic() >= until:
+                                recorder.error = 'Initial frames missing; episode is incomplete'
+                                break
+                    run(fd, pad, arm, limits, stream, recorder=recorder)
+                    recording_result = 'unreviewed'
             finally:
                 if stream:
-                    stream.close()
+                    stream.set_frame_sink(None)
+                    if stream.side:
+                        stream.side.set_frame_sink(None)
+                try:
+                    if recorder:
+                        recorder.close(recording_result)
+                finally:
+                    if stream:
+                        stream.close()
+        if recorder and sys.stdin.isatty():
+            recorder.review()
         return 0
     except KeyboardInterrupt:
         print('Interrupted: no further commands')
