@@ -9,10 +9,11 @@ Keys 1 / 3  -> servo 6 (gripper) + / -    (button numbers 0 / 2)
 Default: USB + OV5647 side preview on port 8080, 3-degree steps.
 SELECT stops the program. --steps can enable START step cycling.
 
-Unlike the vendor example this starts from the angles it reads, ignores input
-until the sticks are centered and buttons released. A failed movement blocks
+Starts by reading current angles and slowly aligning all joints to 90 degrees.
+Manual inputs held during alignment must be released before use. A failed movement blocks
 only that joint/direction; reverse input and other joints remain available.
-Unreadable feedback or wrong-way movement pauses all motion.
+Unreadable joints are disabled; other joints remain available.
+Wrong-way movement pauses all motion.
 Button numbers are Linux joystick numbers: check them
 with joystick_control.py (input-only mode) first.
 """
@@ -97,6 +98,8 @@ def plan(angles, request, step, limits):
     targets = {}
     for servo, direction in request.items():
         angle = angles[servo]
+        if angle is None:
+            continue
         low, high = limits[servo]
         target = min(max(angle + direction * step, min(low, angle)), max(high, angle))
         sdk_low, sdk_high = RANGES[servo]
@@ -123,15 +126,64 @@ def drain(fd, pad):
     raise InputError('Input queue could not be drained; stopping')
 
 
+def align_start(fd, pad, arm, limits, stream):
+    """Move to the requested all-90 start pose before accepting manual motion."""
+    home = {servo: 90 for servo in RANGES}
+    if any(not limits[s][0] <= target <= limits[s][1] for s, target in home.items()):
+        raise RuntimeError('Start pose is outside configured limits')
+    print('Aligning all joints to 90 degrees. SELECT / Ctrl+C cancels.', flush=True)
+    if stream:
+        stream.set_status(['ALIGNING to 90 deg', 'SELECT / Ctrl+C cancels'])
+    deadline = time.monotonic() + 60
+    while time.monotonic() < deadline:
+        drain(fd, pad)
+        if pad.stopped:
+            return False
+        if stream and stream.error:
+            raise RuntimeError(stream.error + '; alignment stopped')
+        angles = read_angles(arm, recover=True)
+        request = {s: (1 if home[s] > q else -1) for s, q in angles.items()
+                   if abs(q - home[s]) > 2}
+        if not request:
+            print('Start pose reached. Gamepad ready.', flush=True)
+            # Inputs held during alignment cannot start manual motion.
+            pad.ready = False
+            drain(fd, pad)
+            return not pad.stopped
+        targets = plan(angles, request, 3, limits)
+        if not targets:
+            raise RuntimeError('Cannot approach start pose within limits')
+        drain(fd, pad)
+        if pad.stopped:
+            return False
+        for servo, target in targets.items():
+            arm.Arm_serial_servo_write(servo, target, 300)
+        until = time.monotonic() + .4
+        while time.monotonic() < until:
+            select.select([fd], [], [], .02)
+            drain(fd, pad)
+            if pad.stopped:
+                return False
+            if stream and stream.error:
+                raise RuntimeError(stream.error + '; alignment stopped')
+        after = read_angles(arm, recover=True)
+        for servo, target in targets.items():
+            if abs(after[servo] - target) > 2 or (after[servo] - angles[servo]) * request[servo] <= 0:
+                raise RuntimeError('Servo {} did not follow alignment; stopped'.format(servo))
+    raise RuntimeError('Start alignment timed out')
+
+
 def run(fd, pad, arm, limits, stream):
-    angles = read_angles(arm, recover=True)
+    angles = read_angles(arm, recover=True, partial=True)
     print('Angles: {}'.format(angles), flush=True)
     for servo, angle in angles.items():
         low, high = RANGES[servo]
-        if not low <= angle <= high:
+        if angle is None:
+            print('Servo {} unavailable: only this joint is disabled'.format(servo), flush=True)
+        elif not low <= angle <= high:
             print('Servo {} near SDK boundary ({}): inward input only'.format(
                 servo, angle), flush=True)
-    print('Center the sticks and release all keys first.', flush=True)
+    print('Gamepad active. SELECT / Ctrl+C stops. Release any held inputs.', flush=True)
     pending, stalls = {}, {servo: 0 for servo in RANGES}
     blocked = {servo: set() for servo in RANGES}
     last_limits = set()
@@ -153,16 +205,21 @@ def run(fd, pad, arm, limits, stream):
                 raise RuntimeError(stream.error + '; stopping')
             stream.set_status(['gamepad  step {} deg  {}'.format(
                 pad.step, 'PAUSED' if faulted else 'MOVE' if pad.request() else 'idle'),
-                'angles ' + ' '.join(str(angles[n]) for n in range(1, 7)),
+                'angles ' + ' '.join('?' if angles[n] is None else str(angles[n]) for n in range(1, 7)),
                 'blocked ' + ' '.join('S{}{}'.format(s, '+' if d > 0 else '-')
                     for s in sorted(blocked) for d in sorted(blocked[s]))])
         if pad.ready:
             faulted = False
         try:
             if pending and time.monotonic() - last_write >= wait:
-                angles = read_angles(arm, recover=True)
+                angles = read_angles(arm, recover=True, partial=True)
                 for servo, (old, target) in pending.items():
                     actual = angles[servo]
+                    if actual is None:
+                        print('S{} unreadable: joint disabled until feedback returns'.format(
+                            servo), flush=True)
+                        stalls[servo] = 0
+                        continue
                     direction = 1 if target > old else -1
                     if (actual - old) * direction < 0:
                         raise RuntimeError('Servo {} moved opposite to command'.format(servo))
@@ -180,13 +237,14 @@ def run(fd, pad, arm, limits, stream):
                 pending = {}
             if pending or not pad.request():
                 continue
-            angles = read_angles(arm, recover=True)
+            angles = read_angles(arm, recover=True, partial=True)
             drain(fd, pad)  # Reading takes time: honor a release or stop that arrived.
             if pad.stopped:
                 print('Stop button: no further commands')
                 return
             request = pad.request()
-            allowed = {s: d for s, d in request.items() if d not in blocked[s]}
+            allowed = {s: d for s, d in request.items()
+                       if angles[s] is not None and d not in blocked[s]}
             targets = plan(angles, allowed, pad.step, limits)
             at_limits = {(s, d) for s, d in allowed.items() if s not in targets}
             for servo, direction in sorted(at_limits - last_limits):
@@ -290,7 +348,9 @@ def main():
                     stream = CameraStream(args.stream, args.bind, args.camera,
                                               side_csi=args.side_csi)
                     print('Camera view: http://<pi-address>:{}/'.format(args.stream), flush=True)
-                run(fd, pad, open_arm(), limits, stream)
+                arm = open_arm()
+                if align_start(fd, pad, arm, limits, stream):
+                    run(fd, pad, arm, limits, stream)
             finally:
                 if stream:
                     stream.close()

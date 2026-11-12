@@ -175,5 +175,42 @@ class GamepadTests(unittest.TestCase):
         self.assertNotIn('Motion paused',out.getvalue())
 
 
+    def test_unknown_joint_at_start_does_not_disable_known_joint(self):
+        class PartialArm:
+            def __init__(self):
+                self.writes=[]
+                self.angles={s:90 for s in RANGES}
+            def Arm_serial_servo_read(self, servo):
+                return None if servo==1 else self.angles[servo]
+            def Arm_serial_servo_write(self, servo,target,duration):
+                self.writes.append((servo,target))
+                self.angles[servo]=target
+        read_fd,write_fd=os.pipe()
+        os.set_blocking(read_fd,False)
+        def send(kind,number,value):
+            os.write(write_fd,struct.pack('=IhBB',0,value,kind,number))
+        def feeder():
+            send(INIT|AXIS,0,0)
+            send(INIT|AXIS,1,0)
+            time.sleep(.3)
+            send(AXIS,0,-32767)  # request unavailable base too
+            send(BUTTON,0,1)    # readable gripper should still move
+            time.sleep(1.3)
+            send(BUTTON,8,1)
+        arm,out=PartialArm(),io.StringIO()
+        thread=threading.Thread(target=feeder)
+        thread.start()
+        try:
+            with contextlib.redirect_stdout(out):
+                run(read_fd,Pad(),arm,parse_limits([]),None)
+        finally:
+            thread.join()
+            os.close(read_fd)
+            os.close(write_fd)
+        self.assertTrue(arm.writes)
+        self.assertTrue(all(s==6 for s,t in arm.writes))
+        self.assertIn('only this joint is disabled',out.getvalue())
+
+
 if __name__ == '__main__':
     unittest.main()

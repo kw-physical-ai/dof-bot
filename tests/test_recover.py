@@ -43,3 +43,18 @@ class RecoveryTests(unittest.TestCase):
         angles={s:90 for s in range(1,7)}
         angles[3]=176
         self.assertEqual(plan(angles,{3:1},3,limits),{3:177})
+
+
+class PartialReadTests(unittest.TestCase):
+    def test_unknown_angle_is_none_not_a_guessed_position(self):
+        arm=Arm()
+        arm.Arm_serial_servo_read_any=lambda s: -73
+        angles=read_angles(arm,recover=True,partial=True)
+        self.assertIsNone(angles[3])
+        self.assertEqual(angles[1],90)
+        self.assertEqual(plan(angles,{3:1,1:1},3,parse_limits([])),{1:93})
+
+    def test_far_outside_angle_remains_disabled(self):
+        arm=Arm()
+        arm.Arm_serial_servo_read_any=lambda s: 245
+        self.assertIsNone(read_angles(arm,recover=True,partial=True)[3])

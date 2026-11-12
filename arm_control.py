@@ -97,7 +97,7 @@ def outside_angle(arm, servo, attempts=3):
     return 180 - mean if servo in (2, 3, 4) else mean
 
 
-def read_angles(arm, recover=False):
+def read_angles(arm, recover=False, partial=False):
     angles = {}
     for servo in range(1, 7):
         value = read_angle_retry(arm, servo)
@@ -108,6 +108,9 @@ def read_angles(arm, recover=False):
             # Only recover near a calibrated SDK boundary. A distant value
             # must never become a large jump or an out-of-range SDK command.
             if value is None or not -3 <= value <= limit + 3:
+                if partial:
+                    angles[servo] = None
+                    continue
                 raise RuntimeError("Servo {} angle unavailable; no further motion".format(servo))
         angles[servo] = round(value)
     return angles
