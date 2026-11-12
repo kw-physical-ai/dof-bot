@@ -134,6 +134,7 @@ def align_start(fd, pad, arm, limits, stream):
     print('Aligning all joints to 90 degrees. SELECT / Ctrl+C cancels.', flush=True)
     if stream:
         stream.set_status(['ALIGNING to 90 deg', 'SELECT / Ctrl+C cancels'])
+    skipped = set()
     deadline = time.monotonic() + 60
     while time.monotonic() < deadline:
         drain(fd, pad)
@@ -141,11 +142,16 @@ def align_start(fd, pad, arm, limits, stream):
             return False
         if stream and stream.error:
             raise RuntimeError(stream.error + '; alignment stopped')
-        angles = read_angles(arm, recover=True)
+        angles = read_angles(arm, recover=True, partial=True)
+        for servo, q in angles.items():
+            if q is None and servo not in skipped:
+                skipped.add(servo)
+                print('S{} unreadable: skipping automatic alignment'.format(servo), flush=True)
         request = {s: (1 if home[s] > q else -1) for s, q in angles.items()
-                   if abs(q - home[s]) > 2}
+                   if s not in skipped and q is not None and abs(q - home[s]) > 2}
         if not request:
-            print('Start pose reached. Gamepad ready.', flush=True)
+            print('Alignment incomplete for {}. Manual control ready.'.format(
+                sorted(skipped)) if skipped else 'Start pose reached. Gamepad ready.', flush=True)
             # Inputs held during alignment cannot start manual motion.
             pad.ready = False
             drain(fd, pad)
@@ -166,11 +172,20 @@ def align_start(fd, pad, arm, limits, stream):
                 return False
             if stream and stream.error:
                 raise RuntimeError(stream.error + '; alignment stopped')
-        after = read_angles(arm, recover=True)
+        after = read_angles(arm, recover=True, partial=True)
         for servo, target in targets.items():
-            if abs(after[servo] - target) > 2 or (after[servo] - angles[servo]) * request[servo] <= 0:
-                raise RuntimeError('Servo {} did not follow alignment; stopped'.format(servo))
-    raise RuntimeError('Start alignment timed out')
+            actual = after[servo]
+            if actual is not None and (actual - angles[servo]) * request[servo] < 0:
+                raise RuntimeError('Servo {} moved opposite to alignment; stopped'.format(servo))
+            if actual is None or abs(actual - target) > 2 or actual == angles[servo]:
+                skipped.add(servo)
+                print('S{} alignment skipped: before={} target={} actual={}; '
+                      'manual control remains available'.format(
+                          servo, angles[servo], target, actual), flush=True)
+    print('Alignment time limit reached. Manual control ready.', flush=True)
+    pad.ready = False
+    drain(fd, pad)
+    return not pad.stopped
 
 
 def run(fd, pad, arm, limits, stream):
