@@ -34,6 +34,17 @@ sudo systemctl start yb-bigProgram dofbot_oled
 
 ## 게임패드 조작 (`gamepad_control.py`)
 
+통합된 카메라 선택 예: `--camera 0,csi0`, `--camera 0,2`,
+`--camera /dev/v4l/by-id/...-video-index0,csi0`. 목록을 명시하면 그 목록만 연다.
+`csi0/csi1`은 `rpicam-hello --list-cameras`의 번호이며 보드 CAM0/CAM1 커넥터를 뜻하지 않는다.
+`/stream/N`과 `/snapshot/N.jpg`는 목록 순서의 카메라별 영상·스냅샷이다.
+기존 `/stream`, `/snapshot.jpg`는 첫 카메라, `/side/stream`은 두 번째 카메라로 유지한다.
+카메라를 명시하지 않으면 기존 USB + 자동 감지 OV5647 구성을 쓴다.
+
+특정 관절만 시작 목표를 지정하려면 `--start 1:90 --start 2:100`을 사용한다.
+`--align-start`, `--no-align`, `--start`는 서로 함께 사용할 수 없다.
+`--start`도 SELECT/Ctrl+C 취소와 기존 3도 단계·피드백 확인을 사용하며 자동 토크 변경은 하지 않는다.
+
 ```bash
 python3 gamepad_control.py
 ```

@@ -5,6 +5,7 @@ program at the same time. The stream is read-only video and carries no control.
 """
 
 import argparse
+import re
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -18,12 +19,41 @@ def camera_arg(text):
     camera even when a Pi 5 adds rp1-cfe/pispbe nodes and the numbers shift.
     """
     text = str(text).strip()
+    if ',' in text:
+        return parse_cameras(text)
     if text.isdigit():
         return int(text)
+    if csi_number(text) is not None:
+        return text
     if text.startswith('/dev/'):
         return text
     raise argparse.ArgumentTypeError(
         'camera must be an index like 0 or a path like /dev/video0')
+
+
+def csi_number(device):
+    match = re.fullmatch(r'csi(\d+)', device) if isinstance(device, str) else None
+    return int(match.group(1)) if match else None
+
+
+def parse_cameras(text):
+    parts = str(text).split(',')
+    if any(not part.strip() for part in parts):
+        raise ValueError('--camera has an empty entry')
+    devices = [camera_arg(part) for part in parts]
+    identities = [str(device_path(d)) for d in devices]
+    if len(identities) != len(set(identities)):
+        raise ValueError('--camera lists the same camera twice')
+    return devices
+
+
+def make_page(count):
+    images = ''.join('<section><h2>camera {0}</h2><img src="/stream/{0}"></section>'.format(i)
+                     for i in range(count))
+    return ('<!doctype html><meta charset="utf-8"><title>Dofbot cameras</title>'
+            '<style>body{margin:0;background:#111;color:white;font:18px sans-serif}'
+            'main{display:flex;flex-wrap:wrap}section{flex:1 1 480px}img{width:100%}</style>'
+            '<main>' + images + '</main>').encode()
 
 
 def device_path(device):
@@ -47,18 +77,20 @@ NOT_A_USB_CAMERA = ('rp1-cfe', 'pispbe', 'rpi-hevc', 'bcm2835-codec', 'bcm2835-i
 class CSICapture:
     """Picamera2 adapter. CAM0 is a connector, not a libcamera index."""
 
-    def __init__(self, width, height, fps):
+    def __init__(self, width, height, fps, number=None):
         try:
             from picamera2 import Picamera2
         except ImportError as exc:
             raise RuntimeError('CSI side view requires system Picamera2 on the Pi') from exc
-        cameras = Picamera2.global_camera_info()
-        matches = [i for i, c in enumerate(cameras)
-                   if c.get('Model', '').lower() == 'ov5647']
-        if len(matches) != 1:
-            raise RuntimeError('Expected one OV5647; run rpicam-hello --list-cameras. '
-                               'Configure dtoverlay=ov5647,cam0 for CAM0.')
-        self.camera = Picamera2(matches[0])
+        if number is None:
+            cameras = Picamera2.global_camera_info()
+            matches = [i for i, c in enumerate(cameras)
+                       if c.get('Model', '').lower() == 'ov5647']
+            if len(matches) != 1:
+                raise RuntimeError('Expected one OV5647; run rpicam-hello --list-cameras. '
+                                   'Configure dtoverlay=ov5647,cam0 for CAM0.')
+            number = matches[0]
+        self.camera = Picamera2(number)
         try:
             # RGB888 arrays use BGR byte order, matching OpenCV/JPEG encoding.
             config = self.camera.create_video_configuration(
@@ -98,23 +130,39 @@ PAGE = (b'<!doctype html><meta charset="utf-8"><title>Dofbot camera</title>'
 class CameraStream:
     def __init__(self, port, bind='0.0.0.0', device=0,
                  width=640, height=480, fps=15, quality=80, side_csi=False,
-                 _csi=False, _serve=True):
+                 _csi=False, _serve=True, _index=0):
         import cv2  # Imported late so tools without a camera need no OpenCV.
         self.cv2 = cv2
         self.fps, self.quality = fps, quality
+        explicit_list = isinstance(device, (list, tuple))
+        remaining = list(device[1:]) if explicit_list else []
+        if explicit_list:
+            if not device:
+                raise ValueError('No camera given')
+            identities = [str(device_path(d)) for d in device]
+            if len(identities) != len(set(identities)):
+                raise ValueError('Same camera listed twice')
+            device = device[0]
+        self._index = _index
+        self._explicit_list = explicit_list
+        number = csi_number(device)
+        is_csi = _csi or number is not None
         path = device_path(device)
         name = device_name(device)
-        if not _csi and name and name.startswith(NOT_A_USB_CAMERA):
+        if not is_csi and name and name.startswith(NOT_A_USB_CAMERA):
             raise RuntimeError(
                 '{} is "{}", a Pi camera-pipeline node, not the USB camera. '
                 'List cameras: v4l2-ctl --list-devices'.format(path, name))
         backend = getattr(cv2, 'CAP_V4L2', cv2.CAP_ANY)
         self.side = None
         self.last_frame_at = time.monotonic()
-        self.cap = (CSICapture(width, height, fps) if _csi
-                    else cv2.VideoCapture(device, backend))
+        if number is not None:
+            self.cap = CSICapture(width, height, fps, number=number)
+        else:
+            self.cap = (CSICapture(width, height, fps) if _csi
+                        else cv2.VideoCapture(device, backend))
         try:
-            if not _csi:
+            if not is_csi:
                 self.cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
                 self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
                 self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
@@ -122,9 +170,9 @@ class CameraStream:
             ok, frame = self.cap.read()
             if not ok:
                 raise RuntimeError(
-                    'Camera {} ({}) gave no frame. Another program may own it: '
+                    'Camera {}: {} ({}) gave no frame. Another program may own it: '
                     'sudo fuser -v {}. Check the number: v4l2-ctl --list-devices'
-                    .format(path, name or 'name unknown', path))
+                    .format(_index, path, name or 'name unknown', path))
             self.size = (frame.shape[1], frame.shape[0])
             self.lines = []
             self.jpeg = None
@@ -136,9 +184,12 @@ class CameraStream:
             self._error = None
             self.cond = threading.Condition()
             self.stop_event = threading.Event()
-            if side_csi:
+            if remaining:
+                self.side = CameraStream(0, device=remaining, width=width, height=height, fps=fps,
+                                         quality=quality, _serve=False, _index=_index + 1)
+            elif side_csi and not explicit_list and not is_csi:
                 self.side = CameraStream(0, width=width, height=height, fps=fps,
-                                         quality=quality, _csi=True, _serve=False)
+                                         quality=quality, _csi=True, _serve=False, _index=_index + 1)
             self.server = self._make_server(bind, port) if _serve else None
         except BaseException:
             if self.side:
@@ -153,9 +204,13 @@ class CameraStream:
             thread.start()
 
     @property
+    def sources(self):
+        return [self] + (self.side.sources if self.side else [])
+
+    @property
     def error(self):
         if self._error:
-            return self._error
+            return 'Camera {}: {}'.format(self._index, self._error)
         if time.monotonic() - self.last_frame_at > 3:
             return 'Camera frame timeout'
         if self.side and self.side.error:
@@ -260,7 +315,8 @@ class CameraStream:
             def do_GET(self):
                 try:
                     if self.path == '/':
-                        self.reply(DUAL_PAGE if stream.side else PAGE, 'text/html')
+                        self.reply(make_page(len(stream.sources)) if stream._explicit_list else
+                                   DUAL_PAGE if stream.side else PAGE, 'text/html')
                     elif self.path == '/snapshot.jpg' and stream.jpeg and not stream.error:
                         self.reply(stream.jpeg, 'image/jpeg')
                     elif self.path == '/stream':
@@ -268,7 +324,21 @@ class CameraStream:
                     elif self.path == '/side/stream' and stream.side:
                         self.serve_stream(stream.side)
                     else:
-                        self.send_error(404)
+                        shot = re.fullmatch(r'/snapshot(?:/(\d+))?\.jpg', self.path)
+                        live = re.fullmatch(r'/stream/(\d+)', self.path)
+                        match = shot or live
+                        index = int(match.group(1) or 0) if match else -1
+                        sources = stream.sources
+                        if not 0 <= index < len(sources):
+                            self.send_error(404)
+                        elif shot:
+                            source = sources[index]
+                            if source.jpeg and not source.error:
+                                self.reply(source.jpeg, 'image/jpeg')
+                            else:
+                                self.send_error(503, 'No frame yet')
+                        else:
+                            self.serve_stream(sources[index])
                 except (BrokenPipeError, ConnectionResetError):
                     pass
 
@@ -303,7 +373,7 @@ def main():
     parser.add_argument('--port', type=int, default=8080)
     parser.add_argument('--bind', default='0.0.0.0')
     parser.add_argument('--camera', type=camera_arg, default=0,
-                        help='index (0 = /dev/video0) or device path')
+                        help='USB index/path, csi0/csi1, or comma-separated cameras, e.g. 0,csi0')
     parser.add_argument('--side-csi', action='store_true',
                         help='show the OV5647 side view next to USB')
     args = parser.parse_args()

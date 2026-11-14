@@ -132,14 +132,14 @@ def drain(fd, pad):
     raise InputError('Input queue could not be drained; stopping')
 
 
-def align_start(fd, pad, arm, limits, stream):
+def align_start(fd, pad, arm, limits, stream, home=None):
     """Move to the requested all-90 start pose before accepting manual motion."""
-    home = {servo: 90 for servo in RANGES}
+    home = home if home is not None else {servo: 90 for servo in RANGES}
     if any(not limits[s][0] <= target <= limits[s][1] for s, target in home.items()):
         raise RuntimeError('Start pose is outside configured limits')
-    print('Aligning all joints to 90 degrees. SELECT / Ctrl+C cancels.', flush=True)
+    print('Aligning selected joints: {}. SELECT / Ctrl+C cancels.'.format(home), flush=True)
     if stream:
-        stream.set_status(['ALIGNING to 90 deg', 'SELECT / Ctrl+C cancels'])
+        stream.set_status(['ALIGNING {}'.format(home), 'SELECT / Ctrl+C cancels'])
     skipped = set()
     deadline = time.monotonic() + 60
     while time.monotonic() < deadline:
@@ -150,11 +150,11 @@ def align_start(fd, pad, arm, limits, stream):
             raise RuntimeError(stream.error + '; alignment stopped')
         angles = read_angles(arm, recover=True, partial=True)
         for servo, q in angles.items():
-            if q is None and servo not in skipped:
+            if servo in home and q is None and servo not in skipped:
                 skipped.add(servo)
                 print('S{} unreadable: skipping automatic alignment'.format(servo), flush=True)
-        request = {s: (1 if home[s] > q else -1) for s, q in angles.items()
-                   if s not in skipped and q is not None and abs(q - home[s]) > 2}
+        request = {s: (1 if home[s] > angles[s] else -1) for s in home
+                   if s not in skipped and angles[s] is not None and abs(angles[s] - home[s]) > 2}
         if not request:
             if all(q is None for q in angles.values()):
                 raise RuntimeError('All 6 servos unreadable: check motor power/board connection; alignment stopped')
@@ -398,6 +398,21 @@ def parse_limits(values):
     return limits
 
 
+def parse_starts(values, limits):
+    starts = []
+    for text in values:
+        try:
+            servo, angle = (int(part) for part in text.split(':'))
+        except ValueError:
+            raise ValueError('--start must look like 1:90')
+        if servo not in limits or any(servo == s for s, _ in starts):
+            raise ValueError('--start names an unknown or repeated servo')
+        if not limits[servo][0] <= angle <= limits[servo][1]:
+            raise ValueError('--start {} is outside configured limits'.format(text))
+        starts.append((servo, angle))
+    return starts
+
+
 def main(collect_task=None):
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -408,6 +423,8 @@ def main(collect_task=None):
                            help='explicitly move all joints toward 90 degrees before manual control')
     alignment.add_argument('--no-align', dest='align_start', action='store_false',
                            help='start at the current pose (default)')
+    alignment.add_argument('--start', action='append', default=[], metavar='SERVO:ANGLE',
+                           help='explicitly align only these joints, e.g. --start 1:90 (repeatable)')
     parser.set_defaults(align_start=False)
     parser.add_argument('--speed', type=float, default=40,
                         help='command speed in degrees/second, 1..180 (default 40); minimum command duration 80ms')
@@ -422,7 +439,7 @@ def main(collect_task=None):
     parser.add_argument('--stream', type=int, default=8080, metavar='PORT')
     parser.add_argument('--bind', default='0.0.0.0')
     parser.add_argument('--camera', type=camera_arg, default=0,
-                        help='camera index (0 = /dev/video0) or a device path')
+                        help='USB index/path, csi0/csi1, or camera list, e.g. 0,csi0')
     parser.add_argument('--side-csi', action='store_true', default=True,
                         help=argparse.SUPPRESS)
     parser.add_argument('--usb-only', dest='side_csi', action='store_false',
@@ -434,6 +451,7 @@ def main(collect_task=None):
         steps = tuple(int(p) for p in args.steps.split(','))
         invert = [int(p) for p in args.invert.split(',') if p]
         limits = parse_limits(args.limit)
+        starts = parse_starts(args.start, limits)
     except ValueError as exc:
         parser.error(str(exc))
     if (not steps or not all(1 <= s <= 10 for s in steps)
@@ -474,21 +492,24 @@ def main(collect_task=None):
                                               side_csi=args.side_csi)
                     print('Camera view: http://<pi-address>:{}/'.format(args.stream), flush=True)
                 arm = open_arm()
-                if not args.align_start or align_start(fd, pad, arm, limits, stream):
+                needs_alignment = bool(args.align_start or starts)
+                if not needs_alignment or align_start(fd, pad, arm, limits, stream,
+                                                      home=dict(starts) if starts else None):
                     if collect_task is not None:
                         if stream is None:
                             raise RuntimeError('Data collection requires camera streaming')
                         from recorder import EpisodeRecorder
-                        cameras = ['wrist', 'external'] if stream.side else ['wrist']
+                        cameras = ['wrist' if i == 0 else 'external' if i == 1 else 'camera{}'.format(i)
+                                   for i in range(len(stream.sources))]
                         recorder = EpisodeRecorder(collect_task, cameras,
                             dict(usb_camera=args.camera, side_csi=args.side_csi,
                                  steps=list(pad.steps), limits=limits, preview_size=list(stream.size),
-                                 start_alignment=args.align_start, speed_deg_s=args.speed,
+                                 start_alignment=needs_alignment, start_targets=dict(starts), speed_deg_s=args.speed,
                                  collection_mode='grasp_then_transport'))
                         pad.phase_requested = False
-                        stream.set_frame_sink(lambda fid, at, frame: recorder.frame('wrist', fid, at, frame))
-                        if stream.side:
-                            stream.side.set_frame_sink(lambda fid, at, frame: recorder.frame('external', fid, at, frame))
+                        for source, name in zip(stream.sources, cameras):
+                            source.set_frame_sink(lambda fid, at, frame, camera=name:
+                                                  recorder.frame(camera, fid, at, frame))
                         print('Recording: {}'.format(recorder.path), flush=True)
                         # Capture a real initial view from every camera before any manual command.
                         until = time.monotonic() + 3
@@ -505,9 +526,8 @@ def main(collect_task=None):
                     recording_result = 'unreviewed'
             finally:
                 if stream:
-                    stream.set_frame_sink(None)
-                    if stream.side:
-                        stream.side.set_frame_sink(None)
+                    for source in stream.sources:
+                        source.set_frame_sink(None)
                 try:
                     if recorder:
                         recorder.close(recording_result)

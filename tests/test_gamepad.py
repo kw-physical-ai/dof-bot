@@ -127,7 +127,8 @@ class GamepadTests(unittest.TestCase):
     def test_startup_motion_requires_explicit_alignment_option(self):
         def ioctl(fd, command, values, mutate):
             values[0] = 2 if command == 0x80016a11 else 12
-        for options, should_align in [([], False), (['--align-start'], True), (['--no-align'], False)]:
+        for options, should_align in [([], False), (['--align-start'], True), (['--no-align'], False),
+                                     (['--start', '1:90', '--start', '2:100'], True)]:
             with self.subTest(options=options), \
                     patch('sys.argv', ['gamepad_control.py', '--usb-only', '--stream', '0'] + options), \
                     patch('gamepad_control.os.open', return_value=123), \
