@@ -30,6 +30,7 @@ class EpisodeRecorder:
         self.queue = queue.Queue(maxsize=queue_size)
         self.counts = {'frames': {c: 0 for c in cameras}, 'states': 0, 'actions': 0}
         self.issues = set()
+        self.grasp_end = None
         try:
             sha = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True,
                                           stderr=subprocess.DEVNULL).strip()
@@ -51,6 +52,10 @@ class EpisodeRecorder:
                          joint_order=[1, 2, 3, 4, 5, 6], joint_unit='degree',
                          image_format='JPEG without overlays; OpenCV BGR input',
                          synchronization='independent cameras; host receive times, not exposure times')
+        if config.get('collection_mode') == 'grasp_then_transport':
+            self.meta.update(collection_mode='grasp_then_transport',
+                             grasp_end=None,
+                             phase_definition='grasp [0, grasp_end); transport [grasp_end, duration]; human confirmed lift, not automatic detection')
         self._save_meta()
         self.thread = threading.Thread(target=self._write, daemon=True)
         self.thread.start()
@@ -92,9 +97,27 @@ class EpisodeRecorder:
                           meaning='SDK command call returned; execution not assumed successful'))
 
     def event(self, kind, **values):
-        if kind == 'control_fault':
-            self.issues.add('control_fault')
+        if kind in ('control_fault', 'feedback_lost'):
+            self.issues.add(kind)
         self._submit(dict(type=kind, t=time.monotonic() - self.started, **values))
+
+    def mark_grasp_complete(self, angles, start, end):
+        """Human-confirmed lifted grasp; records a boundary, never sends commands."""
+        if self.closed or self.error or self.grasp_end is not None:
+            return False
+        if any(angles[s] is None for s in range(1, 7)):
+            return False
+        self.grasp_end = time.monotonic() - self.started
+        marker = dict(t=self.grasp_end, joints=[angles[s] for s in range(1, 7)],
+                      read_start=start - self.started, read_end=end - self.started,
+                      confirmation='operator confirmed object grasped and lifted')
+        self._submit(dict(type='phase_boundary', phase='transport', **marker))
+        if self.error:
+            self.grasp_end = None
+            return False
+        self.meta['grasp_end'] = marker
+        self._save_meta()
+        return True
 
     def _write(self):
         try:
@@ -138,6 +161,8 @@ class EpisodeRecorder:
         for camera, count in self.counts['frames'].items():
             if not count:
                 self.issues.add('no_frames_' + camera)
+        if self.meta.get('collection_mode') == 'grasp_then_transport' and self.grasp_end is None:
+            self.issues.add('missing_grasp_boundary')
         self.meta.update(result=result, recording_complete=self.error is None and
                          self.counts['states'] > 0 and all(self.counts['frames'].values()),
                          error=self.error, counts=self.counts, issues=sorted(self.issues),

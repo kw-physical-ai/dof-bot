@@ -24,6 +24,34 @@ def fake_cv(encode=None):
 
 
 class RecorderTests(unittest.TestCase):
+    def test_grasp_boundary_is_saved_once_with_measured_pose(self):
+        with tempfile.TemporaryDirectory() as root, patch.dict('sys.modules', {'cv2': fake_cv()}):
+            rec = EpisodeRecorder('plastic', ['wrist'],
+                                  {'collection_mode': 'grasp_then_transport'}, root=root)
+            q = {s: 90 for s in range(1, 7)}
+            bad = dict(q)
+            bad[3] = None
+            self.assertFalse(rec.mark_grasp_complete(bad, rec.started, time.monotonic()))
+            self.assertTrue(rec.mark_grasp_complete(q, rec.started, time.monotonic()))
+            self.assertFalse(rec.mark_grasp_complete(q, rec.started, time.monotonic()))
+            rec.close()
+            meta = json.loads((rec.path / 'meta.json').read_text())
+            events = [json.loads(line) for line in (rec.path / 'events.jsonl').read_text().splitlines()]
+            self.assertEqual(len(events), 1)
+            self.assertEqual(events[0]['type'], 'phase_boundary')
+            self.assertEqual(events[0]['joints'], [90] * 6)
+            self.assertEqual(meta['grasp_end']['t'], events[0]['t'])
+            self.assertNotIn('missing_grasp_boundary', meta['issues'])
+            self.assertFalse(rec.mark_grasp_complete(q, rec.started, time.monotonic()))
+
+    def test_missing_boundary_is_flagged_without_inventing_one(self):
+        with tempfile.TemporaryDirectory() as root, patch.dict('sys.modules', {'cv2': fake_cv()}):
+            rec = EpisodeRecorder('test', ['wrist'],
+                                  {'collection_mode': 'grasp_then_transport'}, root=root)
+            rec.close()
+            self.assertIsNone(rec.meta['grasp_end'])
+            self.assertIn('missing_grasp_boundary', rec.meta['issues'])
+
     def test_raw_copy_timestamps_commands_and_metadata(self):
         with tempfile.TemporaryDirectory() as root, patch.dict('sys.modules', {'cv2': fake_cv()}):
             rec = EpisodeRecorder('종이를 옮겨라', ['front', 'side'], {'steps': [3]}, root=root)

@@ -50,3 +50,25 @@ class AlignTests(unittest.TestCase):
         arm.Arm_serial_servo_write = lambda s,t,d: arm.writes.append((s,t,d))
         self.assertTrue(self.execute(arm))
         self.assertEqual(len(arm.writes), 6)
+
+    def test_one_degree_reverse_jitter_skips_joint_without_aborting(self):
+        arm = Arm()
+        def write(s, target, duration):
+            arm.writes.append((s, target, duration))
+            arm.angles[s] = 86 if s == 4 else target
+        arm.Arm_serial_servo_write = write
+        self.assertTrue(self.execute(arm))
+        self.assertEqual(sum(s == 4 for s, _, _ in arm.writes), 1)
+        self.assertEqual(arm.angles[6], 90)
+
+    def test_real_reverse_movement_still_aborts_with_measured_values(self):
+        arm = Arm()
+        arm.Arm_serial_servo_write = lambda s, t, d: arm.angles.update({s: 82})
+        with self.assertRaisesRegex(RuntimeError, 'before=87 target=90 actual=82'):
+            self.execute(arm)
+
+    def test_complete_feedback_loss_never_claims_manual_ready(self):
+        arm = Arm(None)
+        with self.assertRaisesRegex(RuntimeError, 'All 6 servos unreadable'):
+            self.execute(arm)
+        self.assertEqual(arm.writes, [])

@@ -9,7 +9,7 @@ import argparse
 import sys
 import time
 
-from arm_control import exclusive_arm, open_arm
+from arm_control import decode_unbounded_angle, exclusive_arm, open_arm, outside_angle
 
 
 PING_OK = 0xDA  # Arm_Lib: normal answer; 0 means no data from the servo.
@@ -66,6 +66,10 @@ def advice(results):
         if state == 'NO DATA' and ping != PING_OK:
             notes.append('{}: no answer. Check the servo cable at its port and the '
                          'motor power switch/adapter.'.format(label))
+        elif state == 'BOUNDARY':
+            notes.append('{}: stable boundary feedback, command-angle estimate {:.1f} deg. '
+                         'Gamepad permits inward recovery; physical movement is not yet verified.'.format(
+                             label, decode_unbounded_angle(servo, unbounded)))
         elif state == 'NO DATA':
             notes.append('{}: answers ping but the angle is outside the readable range '
                          '(unbounded estimate: {}). Look at where the joint physically '
@@ -117,6 +121,12 @@ def main():
             for servo in range(1, 7):
                 ping, values, unbounded = check(arm, servo, args.reads, args.gap)
                 state = verdict(values)
+                if state == 'NO DATA' and ping == PING_OK:
+                    recovered = outside_angle(arm, servo)
+                    if (recovered is not None and isinstance(unbounded, (int, float))
+                            and abs(decode_unbounded_angle(servo, unbounded) - recovered) <= 2
+                            and -3 <= recovered <= (273 if servo == 5 else 183)):
+                        state = 'BOUNDARY'
                 results[servo] = (ping, values, state, unbounded)
                 print('{:<6} {:<12} {:<10} {:<13} {:<10} {}'.format(
                     servo, NAMES[servo], describe_ping(ping), state, str(unbounded), values))

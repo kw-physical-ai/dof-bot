@@ -68,6 +68,13 @@ def read_angle_retry(arm, servo, attempts=3):
 NO_ANSWER = -73  # read_any result when the board answers raw 0 (servo gave no answer)
 
 
+def decode_unbounded_angle(servo, value):
+    """Convert SDK read_any's unflipped scale to the command-angle scale."""
+    if servo == 5:
+        return 270.0 * (900 + value * 2200 / 180.0 - 380) / 3320.0
+    return 180 - value if servo in (2, 3, 4) else value
+
+
 def outside_angle(arm, servo, attempts=3):
     """Angle of a servo the SDK calls unavailable because it sits outside its range.
 
@@ -92,9 +99,7 @@ def outside_angle(arm, servo, attempts=3):
     if max(values) - min(values) > 2:
         return None
     mean = sum(values) / len(values)
-    if servo == 5:  # read_any always scales as 900..3100 -> 0..180: undo it.
-        return 270.0 * (900 + mean * 2200 / 180.0 - 380) / 3320.0
-    return 180 - mean if servo in (2, 3, 4) else mean
+    return decode_unbounded_angle(servo, mean)
 
 
 def read_angles(arm, recover=False, partial=False):

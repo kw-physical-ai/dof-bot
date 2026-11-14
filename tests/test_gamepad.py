@@ -5,9 +5,9 @@ import struct
 import threading
 import time
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
-from gamepad_control import (AXIS, BUTTON, INIT, RANGES, Pad, parse_limits, plan, run)
+from gamepad_control import (AXIS, BUTTON, INIT, RANGES, Pad, main, parse_limits, plan, run)
 
 
 class StuckArm:
@@ -79,6 +79,33 @@ class GamepadTests(unittest.TestCase):
         pad.event(BUTTON, 9, 1)
         self.assertEqual(pad.step, 6)
 
+    def test_phase_button_ignores_initial_and_repeated_held_events(self):
+        pad = self.neutral(step_button=None, phase_button=9)
+        pad.event(INIT | BUTTON, 9, 1)
+        self.assertFalse(pad.phase_requested)
+        pad.event(BUTTON, 9, 0)
+        pad.event(BUTTON, 9, 1)
+        self.assertTrue(pad.phase_requested)
+        pad.phase_requested = False
+        pad.event(BUTTON, 9, 1)
+        self.assertFalse(pad.phase_requested)
+        self.assertEqual(pad.step, 3)
+
+    def test_phase_marker_reads_feedback_without_motor_writes(self):
+        pad = self.neutral(step_button=None, phase_button=9)
+        rec, arm = Mock(), StuckArm()
+        calls = iter(['mark', 'stop'])
+        def inputs(fd, current):
+            event = next(calls, 'stop')
+            if event == 'mark':
+                current.event(BUTTON, 9, 1)
+            elif rec.mark_grasp_complete.called:
+                current.stopped = True
+        with patch('gamepad_control.select.select'), patch('gamepad_control.drain', side_effect=inputs):
+            run(0, pad, arm, parse_limits([]), None, recorder=rec)
+        rec.mark_grasp_complete.assert_called_once()
+        self.assertEqual(arm.writes, [])
+
     def test_plan_clamps_and_blocks_leaving_the_limit(self):
         angles = {n: 90 for n in range(1, 7)}
         limits = parse_limits(['2:40:100'])
@@ -96,6 +123,77 @@ class GamepadTests(unittest.TestCase):
         for bad in ('2:100:40', '9:0:10', '5:0:300', 'x'):
             with self.assertRaises(ValueError):
                 parse_limits([bad])
+
+    def test_startup_motion_requires_explicit_alignment_option(self):
+        def ioctl(fd, command, values, mutate):
+            values[0] = 2 if command == 0x80016a11 else 12
+        for options, should_align in [([], False), (['--align-start'], True), (['--no-align'], False)]:
+            with self.subTest(options=options), \
+                    patch('sys.argv', ['gamepad_control.py', '--usb-only', '--stream', '0'] + options), \
+                    patch('gamepad_control.os.open', return_value=123), \
+                    patch('gamepad_control.os.close'), patch('gamepad_control.fcntl.ioctl', side_effect=ioctl), \
+                    patch('gamepad_control.signal.signal'), \
+                    patch('gamepad_control.exclusive_arm', return_value=contextlib.nullcontext()), \
+                    patch('gamepad_control.open_arm'), \
+                    patch('gamepad_control.align_start', return_value=True) as alignment, \
+                    patch('gamepad_control.run') as control:
+                self.assertEqual(main(), 0)
+                self.assertEqual(alignment.called, should_align)
+                self.assertEqual(control.call_args.kwargs['speed'], 40)
+
+    def test_fast_repeat_waits_for_feedback_and_reuses_the_read(self):
+        pad, arm = self.neutral(), StuckArm()
+        angles = {s: 90 for s in RANGES}
+        clock, writes = [0.0], []
+        def write(s, target, duration):
+            writes.append((clock[0], duration))
+            angles[s] = target
+        arm.Arm_serial_servo_write = write
+        def select_tick(*args):
+            clock[0] += .02
+        def inputs(fd, current):
+            if len(writes) >= 2:
+                current.stopped = True
+            else:
+                current.event(AXIS, 0, -32767)
+        with patch('gamepad_control.time.monotonic', side_effect=lambda: clock[0]), \
+                patch('gamepad_control.select.select', side_effect=select_tick), \
+                patch('gamepad_control.drain', side_effect=inputs), \
+                patch('gamepad_control.read_angles', side_effect=lambda *a, **kw: dict(angles)) as reads:
+            run(0, pad, arm, parse_limits([]), None)
+        self.assertEqual(len(writes), 2)
+        self.assertEqual(writes[0][1], 80)
+        elapsed = writes[1][0] - writes[0][0]
+        self.assertGreaterEqual(elapsed, .12 - 1e-6)
+        self.assertLess(elapsed, .2)
+        self.assertEqual(reads.call_count, 3)  # initial, first command, first feedback
+
+    def test_all_feedback_missing_at_start_is_an_explicit_error(self):
+        arm = StuckArm()
+        with patch('gamepad_control.read_angles', return_value={s: None for s in RANGES}):
+            with self.assertRaisesRegex(RuntimeError, 'All 6 servos unreadable'):
+                run(0, self.neutral(), arm, parse_limits([]), None)
+        self.assertEqual(arm.writes, [])
+
+    def test_idle_refresh_recovers_unreadable_joint_without_motion(self):
+        pad, arm, rec = self.neutral(), StuckArm(), Mock()
+        before = {s: 90 for s in RANGES}
+        before[4] = None
+        after = {s: 90 for s in RANGES}
+        clock = [0]
+        def now():
+            clock[0] += .6
+            return clock[0]
+        def inputs(fd, current):
+            if rec.state.call_count >= 2:
+                current.stopped = True
+        with patch('gamepad_control.time.monotonic', side_effect=now), \
+                patch('gamepad_control.drain', side_effect=inputs), \
+                patch('gamepad_control.select.select'), \
+                patch('gamepad_control.read_angles', side_effect=[before, after]):
+            run(0, pad, arm, parse_limits([]), None, recorder=rec)
+        self.assertEqual(rec.state.call_args.args[0][4], 90)
+        self.assertEqual(arm.writes, [])
 
     @unittest.skipIf(os.name == 'nt', 'select() on a pipe needs Linux')
     def test_failed_direction_blocks_repeated_writes_without_exiting(self):

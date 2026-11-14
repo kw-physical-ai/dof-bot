@@ -101,10 +101,13 @@ Pi에서는 추적 중인 파일을 직접 수정하지 않는 것을 기본으�
 모터 제어 API는 [Yahboom의 단일 서보 제어 안내](https://github.com/YahboomTechnology/dofbot-Pi/blob/main/10.Basic%20control%20course/3.Control%20single%20servo.pdf)와 [각도 읽기 안내](https://github.com/YahboomTechnology/dofbot-Pi/blob/main/10.Basic%20control%20course/4.Read%20servo%20angle.pdf)를 기준으로 작성했습니다. 설치 이미지의 `Arm_Lib` 동작은 실제 장비에서 확인해야 합니다.
 
 게임패드와 USB + CAM0 OV5647 두 화면은 `python3 gamepad_control.py`로 실행한다.
-시작 시 전체 관절을 90도로 저속 정렬하고, 이동이 확인되지 않은 관절은 표시·제외한 뒤 수동 조작으로 전환한다.
+현재 자세에서 시작하며 실행만으로 관절을 움직이지 않는다. `--align-start`를 지정할 때만 90도 정렬을 실행한다.
 기본 포트는 8080, 이동 단위는 3도다. 초기화 중 SELECT로 중단할 수 있다.
 [두 카메라 설정·실행 안내](CAMERA.md#pi-5-usb--cam0-ov5647-측면-화면)를 따른다.
 
 두 카메라와 게임패드 시범을 파일로 수집하려면 `python collect.py`를 실행한다.
-자동 정렬 후부터 한 에피소드를 기록하고 SELECT 종료 후 성공·실패를 표시한다.
+현재 자세에서 한 에피소드를 기록하고 SELECT 종료 후 성공·실패를 표시한다.
+기본 명령 속도는 초당 40도이며 `--speed 60`처럼 조절한다. 실제 속도는 피드백 읽기 시간에도 영향을 받는다.
+집고 들어 올린 뒤 이동 입력을 놓고 START를 누르면 집기/운반 경계를 저장한다.
+이후 색종이에 놓기까지 수동 조작하며, 고정 운반 동작을 자동 실행하지 않는다.
 [구현된 수집 모드](DATA_COLLECTION.md#구현된-수집-모드-2026-11-12)를 따른다.
