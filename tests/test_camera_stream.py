@@ -4,6 +4,7 @@ import types
 import unittest
 import urllib.error
 import urllib.request
+from unittest.mock import patch
 
 import camera_stream
 from camera_stream import CameraStream, parse_cameras
@@ -86,6 +87,9 @@ class ParseTests(unittest.TestCase):
 
 class StreamTests(unittest.TestCase):
     def setUp(self):
+        names = patch('camera_stream.device_name', return_value='Fake USB camera')
+        names.start()
+        self.addCleanup(names.stop)
         self.saved = sys.modules.get('cv2')
         sys.modules['cv2'] = fake_cv2()
         FakeCap.opened = []
