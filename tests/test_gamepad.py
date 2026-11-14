@@ -168,6 +168,61 @@ class GamepadTests(unittest.TestCase):
         self.assertLess(elapsed, .2)
         self.assertEqual(reads.call_count, 3)  # initial, first command, first feedback
 
+    def test_delayed_shoulder_feedback_is_rechecked_without_resending(self):
+        pad, arm = self.neutral(), StuckArm()
+        clock, writes = [0.0], []
+        def write(s, target, duration):
+            writes.append((clock[0], target))
+        arm.Arm_serial_servo_write = write
+        def read(*args, **kwargs):
+            q = {s: 90 for s in RANGES}
+            if writes and clock[0] >= writes[0][0] + .22:
+                q[2] = writes[0][1]
+            return q
+        def inputs(fd, current):
+            if len(writes) >= 2:
+                current.stopped = True
+            else:
+                current.event(AXIS, 1, 32767)
+        def tick(*args):
+            clock[0] += .02
+        out = io.StringIO()
+        with patch('gamepad_control.time.monotonic', side_effect=lambda: clock[0]), \
+                patch('gamepad_control.select.select', side_effect=tick), \
+                patch('gamepad_control.drain', side_effect=inputs), \
+                patch('gamepad_control.read_angles', side_effect=read), contextlib.redirect_stdout(out):
+            run(0, pad, arm, parse_limits([]), None)
+        self.assertEqual([target for _, target in writes], [93, 96])
+        self.assertGreaterEqual(writes[1][0] - writes[0][0], .22)
+        self.assertNotIn('blocked', out.getvalue())
+
+    def test_both_direction_stall_can_be_retried_after_neutral(self):
+        pad, arm = self.neutral(), StuckArm()
+        clock, writes = [0.0], []
+        q = {s: 90 for s in RANGES}
+        def write(s, target, duration):
+            writes.append((clock[0], target))
+            if clock[0] >= 1.4:
+                q[s] = target
+        arm.Arm_serial_servo_write = write
+        def inputs(fd, current):
+            current.event(AXIS, 1, 32767 if clock[0] < .6 or clock[0] >= 1.4
+                          else -32767 if clock[0] < 1.2 else 0)
+            if clock[0] >= 1.8:
+                current.stopped = True
+        def tick(*args):
+            clock[0] += .02
+        out = io.StringIO()
+        with patch('gamepad_control.time.monotonic', side_effect=lambda: clock[0]), \
+                patch('gamepad_control.select.select', side_effect=tick), \
+                patch('gamepad_control.drain', side_effect=inputs), \
+                patch('gamepad_control.read_angles', side_effect=lambda *a, **kw: dict(q)), \
+                contextlib.redirect_stdout(out):
+            run(0, pad, arm, parse_limits([]), None)
+        self.assertIn('both-direction block cleared', out.getvalue())
+        self.assertTrue(any(at >= 1.4 for at, _ in writes))
+        self.assertGreater(q[2], 90)
+
     def test_all_feedback_missing_at_start_is_an_explicit_error(self):
         arm = StuckArm()
         with patch('gamepad_control.read_angles', return_value={s: None for s in RANGES}):

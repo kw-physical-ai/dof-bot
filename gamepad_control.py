@@ -274,6 +274,14 @@ def run(fd, pad, arm, limits, stream, recorder=None, speed=40):
             faulted = False
         try:
             fresh_feedback = False
+            if not pending and pad.ready and not pad.wanted():
+                for servo in RANGES:
+                    if len(blocked[servo]) == 2:
+                        blocked[servo].clear()
+                        stalls[servo] = 0
+                        print('S{} both-direction block cleared after neutral input.'.format(servo), flush=True)
+                        if recorder:
+                            recorder.event('direction_block_reset', servo=servo, reason='neutral input')
             # Refresh while idle, too: a recovered joint must not stay displayed
             # as unavailable until the operator asks it to move.
             if not pending and not pad.request() and time.monotonic() >= next_refresh:
@@ -290,6 +298,7 @@ def run(fd, pad, arm, limits, stream, recorder=None, speed=40):
             if pending and time.monotonic() - last_write >= wait:
                 angles = observe()
                 fresh_feedback = True
+                remaining = {}
                 if recorder:
                     recorder.event('command_feedback', pending={str(s): list(v) for s, v in pending.items()})
                 for servo, (old, target) in pending.items():
@@ -302,18 +311,32 @@ def run(fd, pad, arm, limits, stream, recorder=None, speed=40):
                     direction = 1 if target > old else -1
                     if (actual - old) * direction < -FEEDBACK_TOLERANCE:
                         raise RuntimeError('Servo {} moved opposite to command'.format(servo))
-                    stalls[servo] = stalls[servo] + 1 if actual == old else 0
-                    if abs(actual - target) > 2 or stalls[servo] >= 3:
+                    # A loaded joint may lag one short command. Re-read the
+                    # same command before blocking; never flood a stalled motor.
+                    if abs(actual - target) > FEEDBACK_TOLERANCE:
+                        stalls[servo] += 1
+                        if stalls[servo] < 3:
+                            remaining[servo] = (old, target)
+                            continue
+                    else:
+                        stalls[servo] = 0
+                    if stalls[servo] >= 3:
                         blocked[servo].add(direction)
                         print('S{} {} blocked: movement not confirmed; reverse allowed'.format(
                             servo, '+' if direction > 0 else '-'), flush=True)
+                        if recorder:
+                            recorder.event('direction_blocked', servo=servo, direction=direction,
+                                           before=old, target=target, actual=actual, feedback_checks=3)
                         stalls[servo] = 0
                     elif (actual - old) * direction > 0:
                         if -direction in blocked[servo]:
                             blocked[servo].discard(-direction)
                             print('S{} reverse movement confirmed; direction cleared'.format(
                                 servo), flush=True)
-                pending = {}
+                pending = remaining
+                if pending:
+                    last_write = time.monotonic()
+                    wait = .12
             if pending or not pad.request():
                 continue
             if not fresh_feedback:
