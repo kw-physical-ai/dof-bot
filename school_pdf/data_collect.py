@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""School-style 3 FPS target-angle recording with a Pi gamepad and USB+CSI."""
+"""School-style 3 FPS target-angle recording with a Pi or PC browser gamepad and USB+CSI."""
+import argparse
 import csv
 import json
 import os
@@ -18,6 +19,7 @@ import cv2
 import gamepad_control as gp
 from arm_control import exclusive_arm, open_arm, read_angles
 from camera_stream import CameraStream
+from school_pdf.remote_gamepad import RemoteGamepad
 
 HOME = [92, 77, 11, 18, 99, 91]
 ROOT = Path(__file__).resolve().parent / 'datasets'
@@ -26,16 +28,36 @@ PAGE = '''<!doctype html><meta charset="utf-8"><title>Dofbot 수집</title>
 <style>body{font:18px system-ui;max-width:1100px;margin:24px auto;padding:0 16px;background:#101820;color:#eef}button{font:inherit;padding:14px;margin:8px 8px 8px 0;cursor:pointer}main{display:flex;gap:12px}section{width:50%}img{width:100%}pre{white-space:pre-wrap} .note{color:#bcd}</style>
 <h1>Dofbot · 실제 데이터 수집</h1><main><section><h2>손목 USB · cam1</h2><img id="cam0"></section><section><h2>외부 CSI · cam2</h2><img id="cam1"></section></main>
 <button onclick="send('start')">수집 시작 · 현재 자세</button><button onclick="send('stop')">정지 / 저장 종료</button>
-<p>Pi에 연결된 게임패드로 조작합니다. 시작 후 스틱과 버튼을 한번 모두 놓으세요.</p>
+<p>입력 모드는 아래 상태에 표시됩니다. PC 모드에서는 이 창을 활성화한 채 PC 게임패드로 조작합니다. 시작 후 스틱과 버튼을 한번 모두 놓으세요.</p>
 <p>왼쪽 스틱: 1·2축 / L1·L2: 3축 / R1·R2: 4축 / 버튼 2·4: 5축 / 버튼 1·3: 집게</p>
 <p><b>START(9): 정지 / SELECT(8): PDF 초기 자세로 이동</b></p>
-<p class="note">3 FPS · 244×244 · 목표각 CSV. 두 카메라는 동시 노출이 아닌 최근 수신 프레임입니다.<br>Pi 게임패드로 직접 조작합니다. 정지는 START(9) 또는 화면의 정지 버튼입니다. 실제 물체를 집는 성공 여부는 직접 확인하세요.</p><pre id="status">연결 중</pre>
-<script>const key='__KEY__';async function send(action){try{const r=await fetch('/'+action,{method:'POST',headers:{'X-Control-Key':key}});if(!r.ok)alert(await r.text())}catch(e){alert(e)}}
-let pending=false;setInterval(async()=>{if(pending)return;pending=true;try{const r=await fetch('/status',{headers:{'X-Control-Key':key}});const s=await r.json();document.getElementById('status').textContent=JSON.stringify(s,null,2);for(let i=0;i<(s.camera_count||1);i++)document.getElementById('cam'+i).src='/cam/'+i+'?t='+Date.now()}catch(e){document.getElementById('status').textContent='연결 끊김: 다시 연결하세요.'}finally{pending=false}},500);</script>'''
+<p class="note">3 FPS · 244×244 · 목표각 CSV. 두 카메라는 동시 노출이 아닌 최근 수신 프레임입니다.<br>PC 모드는 입력이 0.75초 끊기면 새 명령과 수집을 중단합니다. 재연결 후 수집 시작을 다시 누르세요. 정지는 START(9) 또는 화면의 정지 버튼입니다. 실제 물체를 집는 성공 여부는 직접 확인하세요.</p><p id="pad-info"></p><pre id="status">연결 중</pre>
+<script>const key='__KEY__', inputMode='__INPUT__', client=crypto.randomUUID();async function send(action){try{const r=await fetch('/'+action,{method:'POST',headers:{'X-Control-Key':key,'X-Gamepad-Client':client}});if(!r.ok)alert(await r.text())}catch(e){alert(e)}}
+let pending=false;setInterval(async()=>{if(pending)return;pending=true;try{const r=await fetch('/status',{headers:{'X-Control-Key':key}});const s=await r.json();document.getElementById('status').textContent=JSON.stringify(s,null,2);for(let i=0;i<(s.camera_count||1);i++)document.getElementById('cam'+i).src='/cam/'+i+'?t='+Date.now()}catch(e){document.getElementById('status').textContent='연결 끊김: 다시 연결하세요.'}finally{pending=false}},500);
+let inputBusy=false, sequence=0;
+async function sendPad(){
+ if(inputMode!=='pc'||inputBusy)return;
+ inputBusy=true;
+ try{
+  if(!window.isSecureContext||!navigator.getGamepads)throw Error('localhost 주소에서 Chrome/Edge로 열어주세요');
+  const pads=Array.from(navigator.getGamepads()).filter(p=>p&&p.connected);
+  const pad=pads[0], visible=document.visibilityState==='visible'&&document.hasFocus();
+  const connected=!!pad&&visible;
+  document.getElementById('pad-info').textContent=pad?pad.id+' · 축 '+pad.axes.length+' / 버튼 '+pad.buttons.length+(visible?'':' · 창 비활성: 정지'):'게임패드를 PC에 연결하고 버튼을 눌러주세요';
+  const r=await fetch('/input',{method:'POST',headers:{'X-Control-Key':key,'Content-Type':'application/json'},signal:AbortSignal.timeout(500),body:JSON.stringify({client,sequence:++sequence,connected,axes:connected?Array.from(pad.axes):[],buttons:connected?pad.buttons.map(b=>b.pressed):[]})});
+  if(!r.ok)throw Error(await r.text());
+ }catch(e){document.getElementById('pad-info').textContent=String(e)}finally{inputBusy=false}
+}
+setInterval(sendPad,50);
+window.addEventListener('blur',sendPad);
+document.addEventListener('visibilitychange',sendPad);
+</script>'''
 
 
 class Collector:
-    def __init__(self):
+    def __init__(self, input_mode='pi'):
+        self.input_mode = input_mode
+        self.remote = RemoteGamepad()
         self.lock = threading.Lock()
         self.frames = {}
         self.camera_count = 2
@@ -58,7 +80,7 @@ class Collector:
             self.file.close()
             self.file = None
             (self.path / 'meta.json').write_text(json.dumps(dict(
-                reason=reason, frames=self.count, cameras=['USB', 'OV5647'][:self.camera_count],
+                reason=reason, frames=self.count, input_mode=self.input_mode, cameras=['USB', 'OV5647'][:self.camera_count],
                 csi_excluded=self.camera_count == 1,
                 angles='command targets, not measured joint positions',
                 synchronization='latest frames; host monotonic receive times in frames.csv',
@@ -71,6 +93,8 @@ class Collector:
     def begin(self, arm, pad):
         if self.active:
             return
+        if self.input_mode == 'pc' and not self.remote.is_fresh():
+            raise RuntimeError('PC 게임패드를 연결하고 수집 화면을 활성화하세요')
         with self.lock:
             fresh = len(self.frames) == self.camera_count and all(time.monotonic()-x[0] < 1 for x in self.frames.values())
         if not fresh:
@@ -135,7 +159,7 @@ class Collector:
             def do_GET(self):
                 path = self.path.split('?')[0]
                 if path == '/':
-                    self.reply(PAGE.replace('__KEY__',owner.key).encode(),'text/html; charset=utf-8')
+                    self.reply(PAGE.replace('__KEY__',owner.key).replace('__INPUT__',owner.input_mode).encode(),'text/html; charset=utf-8')
                 elif path == '/status':
                     self.reply(json.dumps(owner.status,ensure_ascii=False).encode())
                 elif path in ['/cam/0','/cam/1']:
@@ -148,6 +172,22 @@ class Collector:
             def do_POST(self):
                 if self.headers.get('X-Control-Key') != owner.key:
                     self.send_error(403);return
+                if self.path == '/input' and owner.input_mode == 'pc':
+                    try:
+                        length = int(self.headers.get('Content-Length', '0'))
+                        if not 0 < length <= 4096: raise ValueError('Invalid packet size')
+                        self.connection.settimeout(1)
+                        payload = json.loads(self.rfile.read(length))
+                        if not isinstance(payload, dict): raise ValueError('Expected object')
+                        owner.remote.accept(payload, active=owner.active)
+                    except PermissionError as exc:
+                        self.reply(str(exc).encode(), code=409);return
+                    except (ValueError, OSError) as exc:
+                        self.reply(str(exc).encode(), code=400);return
+                    self.reply(b'{}');return
+                if self.path == '/start' and owner.input_mode == 'pc':
+                    if self.headers.get('X-Gamepad-Client') != owner.remote.client or not owner.remote.is_fresh():
+                        self.reply('이 브라우저의 게임패드 입력을 먼저 확인하세요'.encode(),code=409);return
                 if self.path == '/start' and not owner.status.get('ready'):
                     self.reply('카메라 준비가 완료되지 않았습니다'.encode(),code=503);return
                 if self.path not in ['/start','/stop']:
@@ -159,6 +199,32 @@ class Collector:
                 self.reply(b'{}')
         return Handler
 
+    def require_input(self):
+        if self.input_mode == 'pc' and not self.remote.can_move():
+            raise RuntimeError('PC 입력 끊김/정지 요청 · 정지')
+
+    def poll_input(self, fd, pad):
+        if self.input_mode == 'pi':
+            gp.drain(fd, pad)
+            return False
+        packet = self.remote.snapshot()
+        self.status['gamepad_connected'] = packet['fresh']
+        self.status['gamepad_axes'] = packet['axes']
+        self.status['gamepad_buttons'] = packet['buttons']
+        if packet['lost']:
+            pad.axes.clear()
+            pad.buttons.clear()
+            pad.ready = False
+            pad.phase_requested = False
+        if packet['fresh']:
+            for number, value in enumerate(packet['axes']):
+                pad.event(gp.AXIS, number, round(value*32767))
+            for number, value in enumerate(packet['buttons']):
+                pad.event(gp.BUTTON, number, int(value))
+            pad.settle()
+        pad.stopped |= packet['stop']
+        return packet['lost']
+
     def run(self):
         usb = sorted(Path('/dev/v4l/by-id').glob('*video-index0'))
         if len(usb) != 1:
@@ -168,7 +234,8 @@ class Collector:
         server = ThreadingHTTPServer(('127.0.0.1',8081),self.handler())
         threading.Thread(target=server.serve_forever,daemon=True).start()
         try:
-            fd = os.open('/dev/input/js0',os.O_RDONLY|os.O_NONBLOCK)
+            if self.input_mode == 'pi':
+                fd = os.open('/dev/input/js0',os.O_RDONLY|os.O_NONBLOCK)
             self.status.update(state='USB 카메라 준비 중',csi='OV5647 / csi0')
             with exclusive_arm():
                 arm = open_arm()
@@ -176,11 +243,12 @@ class Collector:
                 for i,source in enumerate(stream.sources):
                     source.set_frame_sink(lambda fid,at,frame,i=i:self.frame(i,at,frame))
                 pad = gp.Pad(stop=9,step_button=None,steps=(1,),phase_button=8)
-                self.status.update(ready=True,state='준비 완료 · 수집 시작을 누르세요',usb=str(usb[0]),camera_count=self.camera_count)
+                self.status.update(ready=True,state='준비 완료 · 수집 시작을 누르세요',usb=str(usb[0]),camera_count=self.camera_count,input_mode=self.input_mode)
                 print('READY http://localhost:8081 (preview only until Start)',flush=True)
                 while not self.quit.is_set():
-                    select.select([fd],[],[],.02)
-                    gp.drain(fd,pad)
+                    if fd is not None:select.select([fd],[],[],.02)
+                    else:self.quit.wait(.02)
+                    input_lost = self.poll_input(fd,pad)
                     with self.lock:
                         command,self.command = self.command,None
                     if pad.stopped or command == 'stop':
@@ -189,6 +257,8 @@ class Collector:
                         pad.ready = False
                         continue
                     try:
+                        if input_lost and self.active:
+                            raise RuntimeError('PC 게임패드 연결 끊김/창 비활성화 · 다시 수집 시작을 누르세요')
                         if stream.error: raise RuntimeError(stream.error)
                         if command == 'start':self.begin(arm,pad)
                         if not self.active:
@@ -200,11 +270,13 @@ class Collector:
                             measured=read_angles(arm)
                             self.status['measured']=measured
                             self.next_read=now+1
-                            gp.drain(fd,pad)
+                            input_lost = self.poll_input(fd,pad)
+                            if input_lost:raise RuntimeError('PC 게임패드 연결 끊김 · 정지')
                             if pad.stopped:continue
                         if pad.phase_requested:
                             pad.phase_requested=False
                             if pad.ready:
+                                self.require_input()
                                 arm.Arm_serial_servo_write6(*HOME,2000)
                                 self.angles=dict(enumerate(HOME,1))
                                 self.next_move=now+2.5
@@ -212,6 +284,7 @@ class Collector:
                         if now >= self.next_move and pad.ready:
                             for servo,direction in pad.request().items():
                                 self.angles[servo]=max(0,min(180,self.angles[servo]+direction))
+                                self.require_input()
                                 arm.Arm_serial_servo_write(servo,self.angles[servo],800)
                             self.next_move=now+.15
                         if now >= self.next_frame:
@@ -232,7 +305,9 @@ class Collector:
             if fd is not None:os.close(fd)
 
 if __name__ == '__main__':
-    collector=Collector()
+    parser=argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--input',choices=['pi','pc'],default='pi',help='gamepad attached to Pi or browser PC')
+    collector=Collector(input_mode=parser.parse_args().input)
     for sig in (signal.SIGINT,signal.SIGTERM):
         signal.signal(sig,lambda *_:collector.quit.set())
     collector.run()

@@ -1,13 +1,17 @@
 # 학교 방식 데이터 수집
 
-학교 자료의 조작 방식과 이미지·목표각 CSV 형식을 바탕으로 수집 코드를 준비했다. 현재 실물에서 사용한 진입점은 **`data_collect.py`**다. 게임패드와 두 카메라를 모두 Pi에 연결한다.
+**다른 PC의 게임패드 + PC↔Pi LAN 구성:** [PC_LAN.md](PC_LAN.md)를 따라 `pc_collect.ipynb` 또는 `data_collect.py --input pc`를 사용한다. Jupyter 실행은 Pi, 게임패드와 브라우저는 PC다.
+
+학교 자료의 조작 방식과 이미지·목표각 CSV 형식을 바탕으로 수집 코드를 준비했다. 기존 Pi 입력 구성에서 실물로 사용한 진입점은 **`data_collect.py`**다. 게임패드와 두 카메라를 모두 Pi에 연결한다.
 
 - [실행 안내](RUN_PI.md): 설치 전제, 실행, 화면 접속, 조작, 저장 위치, 종료.
 - [확인 기록](SESSION_NOTES.md): 실제 확인한 범위, 연결 문제, 카메라 시야와 데이터 해석.
 
 | 파일 | 용도 |
 | --- | --- |
-| `data_collect.py` | Pi 게임패드 직접 입력, USB + OV5647 CSI 미리보기·수집 |
+| `data_collect.py` | `--input pi` 또는 `--input pc`, USB + OV5647 CSI 미리보기·수집 |
+| `pc_collect.ipynb` | Pi Jupyter에서 PC 입력 모드 서버 실행·종료 |
+| `remote_gamepad.py` | PC 입력 검증·제어권·단절 감지 |
 | `gamepad_check.py` | 모터·카메라를 열지 않는 게임패드 입력 확인 화면 |
 | `data_collect.ipynb` | 학교 4번 PDF 12~17쪽 코드 화면을 옮긴 Jupyter 버전 |
 | `arm_handle.ipynb` | 제조사 Docker의 `Dofbot/1.telecontrol/4.arm_handle/arm_handle.ipynb` 복사. 실행 출력은 제거 |
