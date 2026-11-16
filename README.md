@@ -1,5 +1,7 @@
 # Dofbot 준비
 
+2026-11-16: 학교 PDF 방식의 노트북과 Pi에 연결한 게임패드·USB/CSI 두 카메라용 수집 코드는 [학교 방식 수집](school_pdf/README.md)에 정리했습니다. [실행 안내](school_pdf/RUN_PI.md)와 [장비 확인 기록·남은 문제](school_pdf/SESSION_NOTES.md)를 함께 확인하세요.
+
 `feat/dual-camera` 통합으로 `--camera 0,csi0`처럼 카메라 목록을 지정하고
 `/stream/N`, `/snapshot/N.jpg`로 각각 확인할 수 있다. 기존 기본 USB + OV5647,
 `/stream`, `/side/stream`도 유지한다. `csi0`의 번호는 libcamera 목록 순서이며 CAM0 배선 이름과 다르다.
