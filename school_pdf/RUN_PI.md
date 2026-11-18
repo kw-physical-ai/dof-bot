@@ -10,12 +10,37 @@
 
 제조사 `YahboomArm.pyc`, 다른 수집 프로그램, 노트북 커널이 장치를 사용 중이면 먼저 종료한다. `sudo fuser -v /dev/i2c-1 /dev/video*`로 소유 프로세스를 확인한다. 재부팅 후 제조사 앱이 다시 실행될 수 있다. 임의의 PID를 복사해 종료하지 않는다.
 
+### `Camera 0 ... gave no frame` 오류
+
+이 메시지는 USB 카메라가 프레임을 전달하지 못했다는 뜻이다. 주소 표시나 브라우저 연결부터 바꾸지 말고 Pi에서 점유를 확인한다.
+
+```bash
+sudo fuser -v /dev/video0 /dev/video1 /dev/i2c-1
+v4l2-ctl --list-devices
+docker ps --format 'table {{.ID}}\t{{.Names}}\t{{.Status}}\t{{.Image}}'
+```
+
+`fuser`가 `YahboomArm.pyc`를 가리키면 `docker top <컨테이너 이름 또는 ID>`로 그 프로세스가 들어 있는 **현재 실행 중인** 제조사 컨테이너를 확인한다. 컨테이너의 자동 생성 이름은 재부팅 후 달라질 수 있으므로 예전에 사용한 이름을 고정해서 중지하지 않는다. 로봇이 움직이지 않는 것을 확인하고 해당 컨테이너만 종료한다.
+
+```bash
+docker stop --time 10 <확인한 컨테이너 이름 또는 ID>
+sudo fuser -v /dev/video0 /dev/video1 /dev/i2c-1
+```
+
+`fuser`에 USB 영상 장치 점유자가 더는 나오지 않으면, 카메라 오류로 대기 중인 수집 프로그램을 `Ctrl+C`로 끝내고 다시 실행한다. 다른 장치나 컨테이너를 일괄 종료하지 않는다. `docker stop` 뒤 앱이 다시 나타나면 `docker ps`와 `fuser`를 다시 확인한다.
+
 ## 실행과 접속
 
 Pi에서 저장소 루트 기준:
 
 ```bash
 .venv/bin/python school_pdf/data_collect.py
+```
+
+PC에 연결한 브라우저 게임패드를 쓸 때는 `--input pc`를 지정한다.
+
+```bash
+.venv/bin/python school_pdf/data_collect.py --input pc
 ```
 
 노트북에서 별도 터미널을 열고 `<PI_ADDRESS>`에 팀의 Pi LAN/Tailscale 주소를 넣는다.

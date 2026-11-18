@@ -30,7 +30,7 @@ git pull --ff-only origin main
 
 `.venv`가 없다면 루트 README의 Pi 설치 절차부터 따른다. 시스템 apt의 Picamera2/OpenCV를 사용할 수 있도록 가상환경은 `--system-site-packages`로 만든다. Pi 전원·카메라 케이블 문제는 이 입력 방식으로 해결되지 않는다.
 
-기존 수집 서비스가 있다면 `systemctl --user stop dofbot-data-collect`로 종료한다. `sudo fuser -v /dev/i2c-1 /dev/video*`와 `ps -ef`로 카메라를 잡은 제조사 앱을 확인하고 해당 앱만 종료한다. 재부팅 후 앱이 자동 실행될 수 있다.
+기존 수집 서비스가 있다면 `systemctl --user stop dofbot-data-collect`로 종료한다. `sudo fuser -v /dev/i2c-1 /dev/video*`로 USB 카메라를 잡은 프로세스를 확인한다. `YahboomArm.pyc`가 보이면 `docker ps`와 `docker top <컨테이너>`로 현재 제조사 컨테이너를 확인하고, 로봇이 움직이지 않는지 확인한 뒤 그 컨테이너만 종료한다. 자동 생성 컨테이너 이름은 재부팅 후 바뀔 수 있다. 자세한 복구 절차는 [RUN_PI.md](RUN_PI.md)를 따른다.
 
 ## 3. PC에서 SSH 터널 열기
 
@@ -73,6 +73,31 @@ cd ~/dof-bot
 버튼 매핑은 [RUN_PI.md](RUN_PI.md)와 같다. 브라우저 표준 매핑은 Linux 번호와 다를 수 있으므로 처음에는 값 표시와 실제 버튼을 대응시키고 주변을 비운 상태에서 확인한다. 기대한 버튼과 다르면 본 수집을 시작하지 않는다.
 
 브라우저가 게임패드를 읽지 못하면 Chrome/Edge에서 localhost 주소인지, 창이 활성 상태인지, 버튼을 한번 눌렀는지 확인한다. 동시에 여러 브라우저/탭에서 입력하지 않는다. 첫 입력 탭이 제어권을 가지며, 수집 중 다른 탭의 입력은 거부한다.
+
+## Tailnet에서 SSH 터널 없이 HTTPS로 접속
+
+수집 서버는 기본적으로 Pi의 `127.0.0.1:8081`에만 바인딩한다. 같은 Tailscale 네트워크에 있는 사용자가 브라우저에서 직접 열어야 한다면 Tailscale Serve로 HTTPS 프록시를 만든다. Serve는 Tailnet 안에서만 공유하며, 공개 인터넷 공유용 Funnel과 혼동하지 않는다.
+
+Pi에서 한 번 설정한다.
+
+```bash
+sudo tailscale serve status
+sudo tailscale serve --bg 8081
+```
+
+출력에 나온 `https://<장치>.<tailnet>.ts.net/` 주소를 같은 Tailnet의 브라우저에서 연다. 첫 실행에 Serve가 활성화되지 않았다고 나오면 안내된 Tailscale 관리자 페이지에서 HTTPS/Serve를 허용한 뒤 명령을 다시 실행한다. 주소를 `100.x` IP로 추측하지 말고 Serve가 출력한 HTTPS 이름을 사용한다. Tailscale Serve는 HTTPS를 제공해 브라우저 Gamepad API에 필요한 보안 출처도 충족한다.
+
+`--bg` 설정은 재부팅 뒤에도 유지되지만, 수집 프로그램 자체는 다시 실행해야 한다. 공유를 해제할 때는 Pi에서 다음을 실행한다.
+
+```bash
+sudo tailscale serve --https=443 off
+```
+
+Tailnet Serve 상태는 다음으로 확인한다.
+
+```bash
+sudo tailscale serve status
+```
 
 ## 연결이 끊기면
 
