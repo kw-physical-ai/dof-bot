@@ -1,6 +1,6 @@
 # Dofbot 준비
 
-**PC에 게임패드를 연결하고 Pi와 유선 LAN으로 수집하려면 [PC 게임패드·Jupyter 실행 안내](school_pdf/PC_LAN.md)를 따릅니다.** 해당 PC에서 SSH 터널을 열고 `school_pdf/pc_collect.ipynb`를 사용합니다.
+**PC 게임패드로 데이터를 수집하려면 [데이터 수집 빠른 실행](school_pdf/PC_LAN.md) 하나를 따릅니다.** 유선 주소 설정, SSH, 장치 점검, 조작, 저장 검수와 오류 대응을 포함하며 Jupyter는 필요 없습니다.
 
 2026-11-16: 학교 PDF 방식의 노트북과 Pi에 연결한 게임패드·USB/CSI 두 카메라용 수집 코드는 [학교 방식 수집](school_pdf/README.md)에 정리했습니다. [실행 안내](school_pdf/RUN_PI.md)와 [장비 확인 기록·남은 문제](school_pdf/SESSION_NOTES.md)를 함께 확인하세요.
 

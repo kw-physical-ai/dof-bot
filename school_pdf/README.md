@@ -1,6 +1,6 @@
 # 학교 방식 데이터 수집
 
-**다른 PC의 게임패드 + PC↔Pi LAN 구성:** [PC_LAN.md](PC_LAN.md)를 따라 `pc_collect.ipynb` 또는 `data_collect.py --input pc`를 사용한다. Jupyter 실행은 Pi, 게임패드와 브라우저는 PC다.
+**PC 게임패드로 수집:** [데이터 수집 빠른 실행](PC_LAN.md) 하나로 연결·점검·실행·검수를 진행한다. 실행은 Pi의 `data_collect.py --input pc`, 게임패드와 브라우저는 PC다. Jupyter는 선택 사항이며 기본 절차에는 필요 없다.
 
 학교 자료의 조작 방식과 이미지·목표각 CSV 형식을 바탕으로 수집 코드를 준비했다. 기존 Pi 입력 구성에서 실물로 사용한 진입점은 **`data_collect.py`**다. 게임패드와 두 카메라를 모두 Pi에 연결한다.
 

@@ -5,7 +5,7 @@ from pathlib import Path
 import tempfile
 import time
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import numpy as np
 from school_pdf import data_collect as module
@@ -80,6 +80,51 @@ class CollectionTests(unittest.TestCase):
         before = (self.collector.path / 'meta.json').read_text()
         self.collector.finish('server shutdown')
         self.assertEqual((self.collector.path / 'meta.json').read_text(), before)
+
+    def test_any_unavailable_joint_prevents_manual_and_home_writes(self):
+        for servo in range(1,7):
+            for home in (False,True):
+                with self.subTest(servo=servo,home=home):
+                    arm=Mock()
+                    self.pad.ready=True
+                    self.collector.angles=self.angles.copy()
+                    with patch.object(module,'read_angles',side_effect=RuntimeError(f'Servo {servo} angle unavailable')):
+                        with self.assertRaises(RuntimeError):
+                            self.collector.move(arm,self.pad,None,home=home)
+                    arm.Arm_serial_servo_write.assert_not_called()
+                    arm.Arm_serial_servo_write6.assert_not_called()
+                    self.assertFalse(self.collector.status['feedback_valid'])
+
+    def test_stop_received_during_feedback_read_prevents_writes(self):
+        arm=Mock();self.pad.ready=True
+        def stop(*args):
+            self.pad.stopped=True
+            return False
+        with patch.object(self.collector,'poll_input',side_effect=stop):
+            with self.assertRaises(RuntimeError):
+                self.collector.move(arm,self.pad,None,home=True)
+        arm.Arm_serial_servo_write6.assert_not_called()
+
+    def test_latest_input_after_read_is_used_and_target_committed_after_write(self):
+        arm=Mock();self.pad.ready=True
+        self.collector.angles=self.angles.copy()
+        self.pad.axes={0:32767,1:0}
+        def reverse(*args):
+            self.pad.axes[0]=-32767
+            return False
+        with patch.object(self.collector,'poll_input',side_effect=reverse):
+            self.collector.move(arm,self.pad,None)
+        arm.Arm_serial_servo_write.assert_called_once_with(1,91,800)
+        self.assertEqual(self.collector.angles[1],91)
+        self.assertTrue(self.collector.status['feedback_valid'])
+
+    def test_failed_write_does_not_update_saved_target(self):
+        arm=Mock();arm.Arm_serial_servo_write.side_effect=OSError('bus failed')
+        self.pad.ready=True;self.pad.axes={0:32767,1:0}
+        self.collector.angles=self.angles.copy()
+        with patch.object(self.collector,'poll_input',return_value=False):
+            with self.assertRaises(OSError):self.collector.move(arm,self.pad,None)
+        self.assertEqual(self.collector.angles,self.angles)
 
 
 if __name__ == '__main__':

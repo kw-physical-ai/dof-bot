@@ -42,9 +42,10 @@ async function sendPad(){
   if(!window.isSecureContext||!navigator.getGamepads)throw Error('localhost 주소에서 Chrome/Edge로 열어주세요');
   const pads=Array.from(navigator.getGamepads()).filter(p=>p&&p.connected);
   const pad=pads[0], visible=document.visibilityState==='visible'&&document.hasFocus();
-  const connected=!!pad&&visible;
+  const reason=!pad?'gamepad_missing':document.visibilityState!=='visible'?'tab_hidden':!document.hasFocus()?'window_unfocused':'connected';
+  const connected=reason==='connected';
   document.getElementById('pad-info').textContent=pad?pad.id+' · 축 '+pad.axes.length+' / 버튼 '+pad.buttons.length+(visible?'':' · 창 비활성: 정지'):'게임패드를 PC에 연결하고 버튼을 눌러주세요';
-  const r=await fetch('/input',{method:'POST',headers:{'X-Control-Key':key,'Content-Type':'application/json'},signal:AbortSignal.timeout(500),body:JSON.stringify({client,sequence:++sequence,connected,axes:connected?Array.from(pad.axes):[],buttons:connected?pad.buttons.map(b=>b.pressed):[]})});
+  const r=await fetch('/input',{method:'POST',headers:{'X-Control-Key':key,'Content-Type':'application/json'},signal:AbortSignal.timeout(500),body:JSON.stringify({client,sequence:++sequence,connected,reason,axes:connected?Array.from(pad.axes):[],buttons:connected?pad.buttons.map(b=>b.pressed):[]})});
   if(!r.ok)throw Error(await r.text());
  }catch(e){document.getElementById('pad-info').textContent=String(e)}finally{inputBusy=false}
 }
@@ -99,9 +100,7 @@ class Collector:
             fresh = len(self.frames) == self.camera_count and all(time.monotonic()-x[0] < 1 for x in self.frames.values())
         if not fresh:
             raise RuntimeError('두 카메라의 최신 프레임이 필요합니다')
-        angles = read_angles(arm)
-        if any(not 0 <= angles[i] <= 180 for i in range(1,7)):
-            raise RuntimeError('학교 코드의 0~180도 범위 밖 관절이 있습니다')
+        angles = self.checked_angles(arm)
         self.angles = angles
         self.path = ROOT / datetime.now().strftime('dataset_%Y%m%d_%H%M%S_%f')
         for name in ['cam1', 'cam2'][:self.camera_count]:
@@ -200,8 +199,44 @@ class Collector:
         return Handler
 
     def require_input(self):
+        with self.lock:
+            if self.command == 'stop':
+                raise RuntimeError('화면 정지 요청 · 정지')
         if self.input_mode == 'pc' and not self.remote.can_move():
             raise RuntimeError('PC 입력 끊김/정지 요청 · 정지')
+
+    def checked_angles(self, arm):
+        self.status['feedback_valid'] = False
+        try:
+            angles = read_angles(arm)
+            if any(not 0 <= angles[i] <= 180 for i in range(1,7)):
+                raise RuntimeError('학교 코드의 0~180도 범위 밖 관절이 있습니다')
+        except Exception as exc:
+            self.status['feedback_error'] = str(exc)
+            raise
+        self.status.update(measured=angles, feedback_valid=True, feedback_error=None)
+        return angles
+
+    def move(self, arm, pad, fd, home=False):
+        # Read every joint before any write, including SELECT's whole-arm move.
+        # Missing feedback is never replaced by the previous target or by zero.
+        self.checked_angles(arm)
+        lost = self.poll_input(fd, pad)
+        if lost or pad.stopped or self.quit.is_set():
+            raise RuntimeError('이동 전 입력/종료 상태 변경 · 정지')
+        self.require_input()
+        if not pad.ready:
+            return False
+        if home:
+            arm.Arm_serial_servo_write6(*HOME,2000)
+            self.angles = dict(enumerate(HOME,1))
+        else:
+            for servo, direction in pad.request().items():
+                target = max(0,min(180,self.angles[servo]+direction))
+                self.require_input()
+                arm.Arm_serial_servo_write(servo,target,800)
+                self.angles[servo] = target
+        return True
 
     def poll_input(self, fd, pad):
         if self.input_mode == 'pi':
@@ -211,6 +246,15 @@ class Collector:
         self.status['gamepad_connected'] = packet['fresh']
         self.status['gamepad_axes'] = packet['axes']
         self.status['gamepad_buttons'] = packet['buttons']
+        reasons = {'input_timeout': '입력이 750ms 이상 도착하지 않음',
+                   'window_unfocused': '수집 창이 키보드 포커스를 잃음',
+                   'tab_hidden': '수집 탭이 숨겨짐',
+                   'gamepad_missing': '브라우저에서 게임패드가 검출되지 않음'}
+        if packet['lost']:
+            self.status['last_input_loss'] = reasons.get(packet['reason'], packet['reason'])
+            self.status['last_input_loss_at'] = datetime.now().isoformat(timespec='milliseconds')
+        self.status['input_age_ms'] = packet['age_ms']
+        self.status['input_max_gap_ms'] = packet['max_gap_ms']
         if packet['lost']:
             pad.axes.clear()
             pad.buttons.clear()
@@ -258,7 +302,7 @@ class Collector:
                         continue
                     try:
                         if input_lost and self.active:
-                            raise RuntimeError('PC 게임패드 연결 끊김/창 비활성화 · 다시 수집 시작을 누르세요')
+                            raise RuntimeError(str(self.status.get('last_input_loss'))+' · 다시 수집 시작을 누르세요')
                         if stream.error: raise RuntimeError(stream.error)
                         if command == 'start':self.begin(arm,pad)
                         if not self.active:
@@ -267,26 +311,22 @@ class Collector:
                         now=time.monotonic()
                         # Read feedback periodically to detect all-joint communication loss.
                         if now >= self.next_read:
-                            measured=read_angles(arm)
-                            self.status['measured']=measured
+                            self.checked_angles(arm)
                             self.next_read=now+1
                             input_lost = self.poll_input(fd,pad)
-                            if input_lost:raise RuntimeError('PC 게임패드 연결 끊김 · 정지')
+                            if input_lost:raise RuntimeError(str(self.status.get('last_input_loss'))+' · 정지')
                             if pad.stopped:continue
                         if pad.phase_requested:
                             pad.phase_requested=False
                             if pad.ready:
-                                self.require_input()
-                                arm.Arm_serial_servo_write6(*HOME,2000)
-                                self.angles=dict(enumerate(HOME,1))
-                                self.next_move=now+2.5
+                                if self.move(arm,pad,fd,home=True):
+                                    self.next_move=time.monotonic()+2.5
                                 pad.ready=False
                         if now >= self.next_move and pad.ready:
-                            for servo,direction in pad.request().items():
-                                self.angles[servo]=max(0,min(180,self.angles[servo]+direction))
-                                self.require_input()
-                                arm.Arm_serial_servo_write(servo,self.angles[servo],800)
-                            self.next_move=now+.15
+                            if pad.request():
+                                self.move(arm,pad,fd)
+                                self.next_read=time.monotonic()+1
+                            self.next_move=time.monotonic()+.15
                         if now >= self.next_frame:
                             self.save()
                             self.next_frame=now+1/3

@@ -49,6 +49,32 @@ class RemoteGamepadTests(unittest.TestCase):
         r=RemoteGamepad();r.accept(packet(),now=10);r.accept(packet(2),now=12)
         s=r.snapshot(now=12)
         self.assertTrue(s['fresh']);self.assertTrue(s['lost'])
+        self.assertEqual(s['reason'], 'input_timeout')
+        self.assertEqual(s['max_gap_ms'], 2000)
+
+    def test_timeout_reports_age_without_claiming_hardware_disconnect(self):
+        r=RemoteGamepad();r.accept(packet(),now=10)
+        s=r.snapshot(now=10.8)
+        self.assertEqual(s['reason'],'input_timeout')
+        self.assertEqual(s['age_ms'],800)
+
+    def test_browser_loss_reason_survives_reconnection_until_consumed(self):
+        for reason in ('window_unfocused','tab_hidden','gamepad_missing'):
+            with self.subTest(reason=reason):
+                r=RemoteGamepad();r.accept(packet(),now=10)
+                payload=packet(2,connected=False,axes=[],buttons=[])
+                payload['reason']=reason
+                r.accept(payload,now=10.1)
+                r.accept(packet(3),now=10.2)
+                s=r.snapshot(now=10.2)
+                self.assertTrue(s['lost'])
+                self.assertEqual(s['reason'],reason)
+                self.assertIsNone(r.snapshot(now=10.3)['reason'])
+
+    def test_web_stop_blocks_last_moment_motor_guard(self):
+        c=Collector('pc');c.remote.accept(packet());c.command='stop'
+        with self.assertRaisesRegex(RuntimeError,'화면 정지 요청'):
+            c.require_input()
 
     def test_disconnect_latched_even_after_reconnect(self):
         r=RemoteGamepad();r.accept(packet(),now=10)
