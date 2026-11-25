@@ -173,7 +173,8 @@ class CollectionTests(unittest.TestCase):
         self.collector.angles=self.angles.copy()
         with patch.object(self.collector,'poll_input',return_value=False):
             self.collector.move(arm,self.pad,None,home=True)
-        arm.Arm_serial_servo_write6.assert_called_once_with(90,150,0,0,90,30,2000)
+        self.assertEqual([c.args for c in arm.Arm_serial_servo_write.call_args_list],
+                         [(1,90,2000),(2,150,2000),(3,0,2000),(4,0,2000),(5,90,2000),(6,30,2000)])
 
     def test_session_cannot_start_without_full_home_feedback(self):
         self.frames()
@@ -209,7 +210,8 @@ class CollectionTests(unittest.TestCase):
         with patch.object(self.collector.quit,'wait',return_value=False), \
              patch.object(module,'read_angles',side_effect=[self.angles.copy(),dict(enumerate(module.HOME,1))]):
             self.collector.initialize_pose(arm)
-        arm.Arm_serial_servo_write6.assert_called_once_with(90,150,0,0,90,30,2000)
+        self.assertEqual([c.args for c in arm.Arm_serial_servo_write.call_args_list],
+                         [(1,90,2000),(2,150,2000),(3,0,2000),(4,0,2000),(5,90,2000),(6,30,2000)])
         self.assertTrue(self.collector.homed)
 
     def test_startup_no_feedback_sends_no_blind_home_commands(self):
@@ -259,7 +261,8 @@ class CollectionTests(unittest.TestCase):
              patch.object(module,'outside_angle',return_value=-35), \
              patch.object(self.collector.quit,'wait',return_value=False):
             self.collector.initialize_pose(arm)
-        arm.Arm_serial_servo_write6.assert_called_once_with(90,150,0,0,90,30,2000)
+        self.assertEqual([c.args for c in arm.Arm_serial_servo_write.call_args_list],
+                         [(1,90,2000),(2,150,2000),(3,0,2000),(4,0,2000),(5,90,2000),(6,30,2000)])
         self.assertTrue(self.collector.homed)
 
     def test_startup_recovery_rejects_unknown_far_and_nonadjacent_targets(self):
@@ -297,7 +300,7 @@ class CollectionTests(unittest.TestCase):
         with patch.object(module,'read_angles',side_effect=[off,off,self.angles.copy()]), \
              patch.object(self.collector.quit,'wait',return_value=False):
             self.collector.initialize_pose(arm)
-        arm.Arm_serial_servo_write6.assert_called_once()
+        self.assertEqual(arm.Arm_serial_servo_write.call_count,6)
         self.assertTrue(self.collector.homed)
 
     def test_feedback_at_limit_blocks_outward_even_if_target_is_inside(self):

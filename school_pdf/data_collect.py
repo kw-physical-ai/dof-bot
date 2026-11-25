@@ -282,16 +282,13 @@ class Collector:
             if angle is not None and self.angles.get(servo) is None:
                 self.angles[servo] = angle
         if home:
-            if all(angle is not None for angle in measured.values()):
-                arm.Arm_serial_servo_write6(*HOME,2000)
-                self.angles = dict(enumerate(HOME,1))
-            else:
-                for servo, angle in measured.items():
-                    if angle is None:
-                        continue
-                    self.require_input()
-                    arm.Arm_serial_servo_write(servo, HOME[servo-1], 2000)
-                    self.angles[servo] = HOME[servo-1]
+            for servo, angle in measured.items():
+                if angle is None:
+                    continue
+                self.require_input()
+                arm.Arm_serial_servo_write(servo, HOME[servo-1], 2000)
+                self.angles[servo] = HOME[servo-1]
+                time.sleep(.02)
         else:
             # Read every joint quickly, but only pay for extended boundary
             # feedback when that joint is actually requested by the operator.
@@ -373,8 +370,14 @@ class Collector:
         if self.quit.is_set() or stopped:
             raise RuntimeError('시작 기본자세 이동 취소')
         deadline = time.monotonic()+5
-        arm.Arm_serial_servo_write6(*HOME, 2000)
-        self.angles = dict(enumerate(HOME, 1))
+        for servo, target in enumerate(HOME, 1):
+            with self.lock:
+                stopped = self.command == 'stop'
+            if self.quit.is_set() or stopped:
+                raise RuntimeError('시작 기본자세 이동 취소')
+            arm.Arm_serial_servo_write(servo, target, 2000)
+            self.angles[servo] = target
+            time.sleep(.02)
         if self.quit.wait(2):
             raise RuntimeError('시작 기본자세 이동 중 종료')
         while True:
