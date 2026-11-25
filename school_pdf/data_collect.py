@@ -307,9 +307,9 @@ class Collector:
             if lost or pad.stopped or self.quit.is_set():
                 raise RuntimeError('이동 전 입력/종료 상태 변경 · 정지')
             self.require_input()
-            available = {servo: (self.angles[servo] if measured[servo] is not None else None)
-                         for servo in LIMITS}
-            targets = gp.plan(available, pad.request(), MANUAL_STEP, LIMITS)
+            # Never accumulate targets while an actuator is lagging or stalled.
+            # Each new command stays one step from actual encoder feedback.
+            targets = gp.plan(measured, pad.request(), MANUAL_STEP, LIMITS)
             for servo, direction in pad.request().items():
                 angle = measured[servo]
                 if angle is None:

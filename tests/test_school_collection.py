@@ -293,7 +293,18 @@ class CollectionTests(unittest.TestCase):
         measured=self.angles.copy();measured[3]=None
         with patch.object(module,'outside_angle',return_value=-1):
             arm=self.manual_move(measured,{3:1})
-        arm.Arm_serial_servo_write.assert_called_once_with(3,3,150)
+        arm.Arm_serial_servo_write.assert_called_once_with(3,2,150)
+
+    def test_lagging_servo_target_cannot_accumulate_far_from_feedback(self):
+        arm=Mock();self.pad.ready=True
+        self.collector.angles=self.angles.copy();self.collector.angles[1]=117
+        measured=self.angles.copy();measured[1]=72
+        with patch.object(module,'read_angles',return_value=measured), \
+             patch.object(self.collector,'poll_input',return_value=False), \
+             patch.object(self.pad,'request',return_value={1:1}):
+            self.collector.move(arm,self.pad,None)
+        arm.Arm_serial_servo_write.assert_called_once_with(1,75,150)
+        self.assertEqual(self.collector.angles[1],75)
 
     def test_home_can_settle_after_first_read_without_resending(self):
         arm=Mock();off=self.angles.copy();off[1]=80
