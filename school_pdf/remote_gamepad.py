@@ -38,7 +38,11 @@ class RemoteGamepad:
             raise ValueError('Invalid gamepad packet')
         with self.lock:
             fresh = self.at is not None and now-self.at <= self.timeout
-            if self.client != client and self.client is not None and (fresh or active):
+            # Observer/background tabs must neither claim ownership nor keep
+            # an unfocused owner's lease alive against the focused controller.
+            if self.client != client and not connected:
+                return
+            if self.client != client and self.client is not None and (fresh and self.connected or active):
                 raise PermissionError('Another browser owns the gamepad; close it and stop collection first')
             if self.client == client and seq <= self.sequence:
                 raise ValueError('Old gamepad packet')

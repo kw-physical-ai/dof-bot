@@ -121,6 +121,62 @@ def read_angles(arm, recover=False, partial=False):
     return angles
 
 
+def _verified_oled_pid(pid, control_group):
+    """Recognize only the inspected display script in its system service."""
+    try:
+        process = Path('/proc') / str(pid)
+        argv = process.joinpath('cmdline').read_bytes().split(b'\0')
+        argv = [arg.decode() for arg in argv if arg]
+        if len(argv) not in (2, 3):
+            return False
+        if Path(argv[0]).name != 'python3':
+            return False
+        if argv[1] != '/home/pi/oled_yahboom/yahboom_oled.py':
+            return False
+        if len(argv) == 3 and argv[2] != 'debug':
+            return False
+        return any(
+            line.split(':', 2)[-1] == control_group
+            for line in process.joinpath('cgroup').read_text().splitlines())
+    except (OSError, UnicodeError):
+        return False
+
+
+def check_i2c_owners():
+    """Allow the known OLED service, but fail closed for every other owner.
+
+    This is a startup check, not an address lock or a guarantee against
+    unrelated processes opening the bus later. Keep the arm file lock too.
+    """
+    result = subprocess.run(
+        ['sudo', '-n', 'fuser', I2C_DEVICE],
+        capture_output=True, text=True, timeout=5)
+    if result.returncode == 1 and not result.stdout.strip() and not result.stderr.strip():
+        return
+    # fuser writes its device label to stderr and PIDs to stdout.
+    pids = result.stdout.split()
+    if (result.returncode == 0 and pids
+            and all(pid.isdecimal() and int(pid) > 0 for pid in pids)
+            and result.stderr.strip() in ('', I2C_DEVICE + ':')):
+        service = subprocess.run(
+            ['systemctl', 'show', 'yahboom_oled.service',
+             '--property=ActiveState', '--property=ControlGroup'],
+            capture_output=True, text=True, timeout=5)
+        properties = dict(line.split('=', 1) for line in service.stdout.splitlines()
+                          if '=' in line)
+        group = properties.get('ControlGroup', '')
+        if (service.returncode == 0 and not service.stderr.strip()
+                and properties.get('ActiveState') == 'active'
+                and group == '/system.slice/yahboom_oled.service'
+                and all(_verified_oled_pid(pid, group) for pid in pids)):
+            return
+    raise RuntimeError(
+        'I2C is in use by an unverified process or ownership could not be checked. '
+        'Inspect: sudo fuser -v {}. Only the active yahboom_oled.service display '
+        'process is allowed alongside the arm. Stop other arm/notebook users; '
+        'sudo -n fuser must be permitted.'.format(I2C_DEVICE))
+
+
 @contextmanager
 def exclusive_arm():
     directory = Path.home() / '.cache' / 'dof-bot'
@@ -132,13 +188,5 @@ def exclusive_arm():
             raise RuntimeError('Another dof-bot tool owns the arm')
         check_i2c_device()
         # Run before creating Arm_Device, which itself opens the I2C device.
-        result = subprocess.run(
-            ['sudo', '-n', 'fuser', I2C_DEVICE],
-            capture_output=True, text=True, timeout=5)
-        if result.returncode != 1 or result.stdout.strip() or result.stderr.strip():
-            raise RuntimeError(
-                'I2C is in use or ownership could not be checked. '
-                'Inspect: sudo fuser -v {}. Stop other arm/OLED/notebook '
-                'users first. sudo -n fuser must be permitted '
-                '(sudo apt install psmisc if fuser is missing).'.format(I2C_DEVICE))
+        check_i2c_owners()
         yield

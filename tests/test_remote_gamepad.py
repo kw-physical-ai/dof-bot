@@ -101,6 +101,27 @@ class RemoteGamepadTests(unittest.TestCase):
         with self.assertRaises(ValueError):r.accept(packet(1),now=10.5)
         self.assertEqual(r.at,10)
 
+    def test_background_tab_cannot_claim_or_refresh_ownership(self):
+        r=RemoteGamepad()
+        r.accept(packet(connected=False,axes=[],buttons=[]),now=10)
+        self.assertIsNone(r.client)
+        r.accept(packet(client='focused'),now=10.1)
+        r.accept(packet(2,connected=False,axes=[],buttons=[]),now=10.2)
+        self.assertEqual(r.client,'focused')
+        self.assertEqual(r.at,10.1)
+
+    def test_focused_tab_can_replace_unfocused_owner_only_when_stopped(self):
+        for active in (False,True):
+            with self.subTest(active=active):
+                r=RemoteGamepad();r.accept(packet(),now=10)
+                r.accept(packet(2,connected=False,axes=[],buttons=[]),now=10.1)
+                if active:
+                    with self.assertRaises(PermissionError):
+                        r.accept(packet(client='focused'),active=True,now=10.2)
+                else:
+                    r.accept(packet(client='focused'),now=10.2)
+                    self.assertEqual(r.client,'focused')
+
     def test_invalid_inputs_rejected(self):
         for values in [dict(axes=[math.nan,0]),dict(axes=[2,0]),dict(buttons=[1]*12),
                        dict(axes=[]),dict(sequence=True),dict(client='')]:
