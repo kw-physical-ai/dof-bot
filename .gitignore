@@ -2,9 +2,14 @@
 __pycache__/
 *.py[cod]
 .venv/
+.venv-train/
 venv/
 .env
 .env.*
 *.log
 /pdf/
 /data/
+/training_data/
+/training_exports/
+/training_runs/
+/artifacts/

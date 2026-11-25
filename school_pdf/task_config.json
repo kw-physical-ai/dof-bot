@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "layout_id": "layout-v1",
+  "mapping_confirmed": false,
+  "tasks": {
+    "paper": {"destination": "paper_bin"},
+    "plastic": {"destination": "plastic_bin"},
+    "vinyl": {"destination": "vinyl_bin"}
+  }
+}

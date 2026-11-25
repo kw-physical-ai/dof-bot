@@ -1,0 +1,5 @@
+# Tested offline training environment: Python 3.11.18, CPU and available MPS.
+# Install into a separate venv; collector/robot dependencies are not needed.
+torch==2.15.0
+numpy==2.4.6
+opencv-python-headless==5.1.0.95

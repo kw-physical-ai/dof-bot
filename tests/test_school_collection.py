@@ -24,6 +24,9 @@ class CollectionTests(unittest.TestCase):
         self.addCleanup(self.read.stop)
         self.collector = module.Collector()
         self.collector.homed = True
+        self.collector.task_config['mapping_confirmed'] = True
+        self.collector.session_context = dict(task='paper',destination='paper_bin',object_id='paper-a',
+            position_id='A1',scene_id='scene-1',operator='test',camera_setup='fixed-v1',bin_layout='layout-v1')
         self.pad = module.gp.Pad(stop=9, step_button=None, steps=(1,), phase_button=8)
         self.addCleanup(lambda: self.collector.finish('test complete'))
 
@@ -128,6 +131,7 @@ class CollectionTests(unittest.TestCase):
         self.assertEqual(self.collector.angles,self.angles)
 
     def manual_move(self, measured, request):
+        self.collector.following.reset()
         arm = Mock()
         self.pad.ready = True
         self.collector.angles = self.angles.copy()
