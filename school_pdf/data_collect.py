@@ -28,8 +28,8 @@ HOME = [90, 150, 0, 0, 90, 30]
 # Normal gamepad movement still uses the SDK limits and narrow +/-3 recovery.
 HOME_RECOVERY_MARGIN = 45
 LIMITS = {servo: (0, 270 if servo == 5 else 180) for servo in range(1, 7)}
-MANUAL_STEP = 1.5
-MANUAL_MOVE_MS = 533
+MANUAL_STEP = 3
+MANUAL_MOVE_MS = 150
 ROOT = Path(__file__).resolve().parent / 'datasets'
 gp.DEADZONE = 3277  # PDF: approximately 0.1 of the stick range.
 PAGE = '''<!doctype html><meta charset="utf-8"><title>Dofbot 수집</title>
@@ -232,10 +232,10 @@ class Collector:
         if self.input_mode == 'pc' and not self.remote.can_move():
             raise RuntimeError('PC 입력 끊김/정지 요청 · 정지')
 
-    def checked_angles(self, arm, partial=False, for_home=False):
+    def checked_angles(self, arm, partial=False, for_home=False, recover=True):
         self.status['feedback_valid'] = False
         try:
-            angles = read_angles(arm, recover=True, partial=partial or for_home)
+            angles = read_angles(arm, recover=recover, partial=partial or for_home)
             recovery = {}
             if for_home:
                 for servo, angle in angles.items():
@@ -269,7 +269,7 @@ class Collector:
     def move(self, arm, pad, fd, home=False):
         # Read every joint before any write, including SELECT's whole-arm move.
         # Missing feedback is never replaced by the previous target or by zero.
-        measured = self.checked_angles(arm, partial=True)
+        measured = self.checked_angles(arm, partial=True, recover=home)
         lost = self.poll_input(fd, pad)
         if lost or pad.stopped or self.quit.is_set():
             raise RuntimeError('이동 전 입력/종료 상태 변경 · 정지')
@@ -293,6 +293,23 @@ class Collector:
                     arm.Arm_serial_servo_write(servo, HOME[servo-1], 2000)
                     self.angles[servo] = HOME[servo-1]
         else:
+            # Read every joint quickly, but only pay for extended boundary
+            # feedback when that joint is actually requested by the operator.
+            for servo in pad.request():
+                if measured[servo] is not None:
+                    continue
+                angle = outside_angle(arm, servo)
+                low, high = LIMITS[servo]
+                if angle is not None and low-3 <= angle <= high+3:
+                    measured[servo] = round(angle)
+                    self.status['measured'][servo] = measured[servo]
+                    self.status['blocked_joints'].pop(servo, None)
+                    if self.angles[servo] is None:
+                        self.angles[servo] = measured[servo]
+            lost = self.poll_input(fd, pad)
+            if lost or pad.stopped or self.quit.is_set():
+                raise RuntimeError('이동 전 입력/종료 상태 변경 · 정지')
+            self.require_input()
             available = {servo: (self.angles[servo] if measured[servo] is not None else None)
                          for servo in LIMITS}
             targets = gp.plan(available, pad.request(), MANUAL_STEP, LIMITS)
@@ -355,15 +372,24 @@ class Collector:
             stopped = self.command == 'stop'
         if self.quit.is_set() or stopped:
             raise RuntimeError('시작 기본자세 이동 취소')
+        deadline = time.monotonic()+5
         arm.Arm_serial_servo_write6(*HOME, 2000)
         self.angles = dict(enumerate(HOME, 1))
         if self.quit.wait(2):
             raise RuntimeError('시작 기본자세 이동 중 종료')
-        measured = self.checked_angles(arm)
-        off_pose = {servo: angle for servo, angle in measured.items()
-                    if abs(angle-HOME[servo-1]) > 3}
-        if off_pose:
-            raise RuntimeError('기본자세 도달 확인 실패 · 수집 차단: '+str(off_pose))
+        while True:
+            measured = self.checked_angles(arm)
+            off_pose = {servo: angle for servo, angle in measured.items()
+                        if abs(angle-HOME[servo-1]) > 3}
+            if not off_pose:
+                break
+            if time.monotonic() >= deadline:
+                raise RuntimeError('기본자세 도달 확인 실패 · 수집 차단: '+str(off_pose))
+            self.status['state'] = '기본자세 도달 대기: '+str(off_pose)
+            with self.lock:
+                stopped = self.command == 'stop'
+            if self.quit.wait(.15) or stopped:
+                raise RuntimeError('기본자세 확인 중 정지')
         self.homed = True
         self.status['home_verified'] = True
 
@@ -422,7 +448,7 @@ class Collector:
                         now=time.monotonic()
                         # Read feedback periodically to detect all-joint communication loss.
                         if now >= self.next_read:
-                            self.checked_angles(arm, partial=True)
+                            self.checked_angles(arm, partial=True, recover=False)
                             self.next_read=now+1
                             input_lost = self.poll_input(fd,pad)
                             if input_lost:raise RuntimeError(str(self.status.get('last_input_loss'))+' · 정지')

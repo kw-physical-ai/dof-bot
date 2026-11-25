@@ -115,8 +115,8 @@ class CollectionTests(unittest.TestCase):
             return False
         with patch.object(self.collector,'poll_input',side_effect=reverse):
             self.collector.move(arm,self.pad,None)
-        arm.Arm_serial_servo_write.assert_called_once_with(1,91.5,533)
-        self.assertEqual(self.collector.angles[1],91.5)
+        arm.Arm_serial_servo_write.assert_called_once_with(1,93,150)
+        self.assertEqual(self.collector.angles[1],93)
         self.assertTrue(self.collector.status['feedback_valid'])
 
     def test_failed_write_does_not_update_saved_target(self):
@@ -145,16 +145,16 @@ class CollectionTests(unittest.TestCase):
                     other = 2 if servo == 1 else 1
                     self.angles[servo] = angle
                     arm = self.manual_move(self.angles.copy(), {servo: outward, other: 1})
-                    arm.Arm_serial_servo_write.assert_called_once_with(other, self.angles[other]+1.5, 533)
+                    arm.Arm_serial_servo_write.assert_called_once_with(other, self.angles[other]+3, 150)
                     arm = self.manual_move(self.angles.copy(), {servo: -outward})
-                    arm.Arm_serial_servo_write.assert_called_once_with(servo, angle-outward*1.5, 533)
+                    arm.Arm_serial_servo_write.assert_called_once_with(servo, angle-outward*3, 150)
             self.angles[servo] = 90
 
     def test_one_missing_joint_does_not_block_healthy_joint(self):
         measured = self.angles.copy()
         measured[3] = None
         arm = self.manual_move(measured, {3: 1, 1: 1})
-        arm.Arm_serial_servo_write.assert_called_once_with(1, 91.5, 533)
+        arm.Arm_serial_servo_write.assert_called_once_with(1, 93, 150)
         self.assertEqual(self.collector.angles[3], self.angles[3])
         self.assertIsNone(self.collector.status['measured'][3])
         self.assertFalse(self.collector.status['feedback_valid'])
@@ -166,7 +166,7 @@ class CollectionTests(unittest.TestCase):
     def test_fifth_joint_can_cross_180(self):
         self.angles[5] = 180
         arm = self.manual_move(self.angles.copy(), {5: 1})
-        arm.Arm_serial_servo_write.assert_called_once_with(5, 181.5, 533)
+        arm.Arm_serial_servo_write.assert_called_once_with(5, 183, 150)
 
     def test_home_pose_keeps_slow_two_second_move(self):
         arm=Mock();self.pad.ready=True
@@ -187,7 +187,7 @@ class CollectionTests(unittest.TestCase):
         self.angles[1]=None
         measured=self.angles.copy();measured[1]=42
         arm=self.manual_move(measured,{1:1})
-        arm.Arm_serial_servo_write.assert_called_once_with(1,43.5,533)
+        arm.Arm_serial_servo_write.assert_called_once_with(1,45,150)
 
     def test_home_moves_only_joints_with_feedback(self):
         arm=Mock();self.pad.ready=True
@@ -202,7 +202,7 @@ class CollectionTests(unittest.TestCase):
     def test_faster_step_clamps_to_limit_without_overshoot(self):
         self.angles[5]=269
         arm=self.manual_move(self.angles.copy(),{5:1})
-        arm.Arm_serial_servo_write.assert_called_once_with(5,270,533)
+        arm.Arm_serial_servo_write.assert_called_once_with(5,270,150)
 
     def test_startup_pose_moves_known_joints_to_configured_home(self):
         arm=Mock()
@@ -231,7 +231,8 @@ class CollectionTests(unittest.TestCase):
         arm=Mock()
         self.angles[2]=120
         with patch.object(self.collector.quit,'wait',return_value=False), \
-             patch.object(module,'read_angles',return_value=self.angles.copy()):
+             patch.object(module,'read_angles',return_value=self.angles.copy()), \
+             patch.object(module.time,'monotonic',side_effect=[0,6]):
             with self.assertRaisesRegex(RuntimeError,'도달 확인 실패'):
                 self.collector.initialize_pose(arm)
         self.assertFalse(self.collector.homed)
@@ -278,11 +279,32 @@ class CollectionTests(unittest.TestCase):
                 with self.assertRaises(RuntimeError):self.collector.initialize_pose(arm)
             arm.Arm_serial_servo_write6.assert_not_called()
 
+    def test_unrequested_boundary_does_not_delay_healthy_joint(self):
+        measured=self.angles.copy();measured[3]=None
+        with patch.object(module,'outside_angle') as extended:
+            arm=self.manual_move(measured,{1:1})
+        extended.assert_not_called()
+        arm.Arm_serial_servo_write.assert_called_once_with(1,93,150)
+
+    def test_requested_boundary_can_move_inward(self):
+        measured=self.angles.copy();measured[3]=None
+        with patch.object(module,'outside_angle',return_value=-1):
+            arm=self.manual_move(measured,{3:1})
+        arm.Arm_serial_servo_write.assert_called_once_with(3,3,150)
+
+    def test_home_can_settle_after_first_read_without_resending(self):
+        arm=Mock();off=self.angles.copy();off[1]=80
+        with patch.object(module,'read_angles',side_effect=[off,off,self.angles.copy()]), \
+             patch.object(self.collector.quit,'wait',return_value=False):
+            self.collector.initialize_pose(arm)
+        arm.Arm_serial_servo_write6.assert_called_once()
+        self.assertTrue(self.collector.homed)
+
     def test_feedback_at_limit_blocks_outward_even_if_target_is_inside(self):
         measured = self.angles.copy()
         measured[1] = 180
         arm = self.manual_move(measured, {1: 1, 2: 1})
-        arm.Arm_serial_servo_write.assert_called_once_with(2, 151.5, 533)
+        arm.Arm_serial_servo_write.assert_called_once_with(2, 153, 150)
 
 
 if __name__ == '__main__':
